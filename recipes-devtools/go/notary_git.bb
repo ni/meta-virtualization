@@ -7,7 +7,7 @@ LIC_FILES_CHKSUM = "file://src/${PKG_NAME}/LICENSE;md5=771ddb425ba03c8fab49e5bd9
 SRCNAME = "notary"
 
 PKG_NAME = "github.com/docker/${SRCNAME}"
-SRC_URI = "git://${PKG_NAME}.git;destsuffix=git/src/${PKG_NAME}"
+SRC_URI = "git://${PKG_NAME}.git;protocol=https;destsuffix=git/src/${PKG_NAME}"
 
 SRCREV = "c8aa8cf53cbcda2e92def0c9291e25d770493494"
 PV = "0.4.2+git${SRCPV}"

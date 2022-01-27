@@ -16,7 +16,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=412de458544c1cb6a2b512cd399286e2"
 SRCREV = "a31c1854e10580a09621e539c3ec052b875a8e06"
 PV = "3.4+git${SRCPV}"
 
-SRC_URI = "git://github.com/xemul/criu.git;protocol=git \
+SRC_URI = "git://github.com/xemul/criu.git;protocol=https \
            file://0001-criu-Fix-toolchain-hardcode.patch \
            file://0002-criu-Skip-documentation-install.patch \
            file://0001-criu-Change-libraries-install-directory.patch \

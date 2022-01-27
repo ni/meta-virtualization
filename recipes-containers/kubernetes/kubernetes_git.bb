@@ -6,7 +6,7 @@ maintenance, and scaling of applications. \
 "
 
 SRCREV_kubernetes = "fc32d2f3698e36b93322a3465f63a14e9f0eaead"
-SRC_URI = "git://github.com/kubernetes/kubernetes.git;nobranch=1;name=kubernetes \
+SRC_URI = "git://github.com/kubernetes/kubernetes.git;nobranch=1;name=kubernetes;protocol=https \
           "
 
 DEPENDS += "rsync-native \

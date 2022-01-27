@@ -12,8 +12,8 @@ is simple to implement. \
 SRCREV_cni = "4b9e11a5266fe50222ed00c5973c6ea4a384a4bb"
 SRCREV_plugins = "c238c93b5e7c681f1935ff813b30e82f96f6c367"
 SRC_URI = "\
-	git://github.com/containernetworking/cni.git;nobranch=1;name=cni \
-        git://github.com/containernetworking/plugins.git;nobranch=1;destsuffix=plugins;name=plugins \
+	git://github.com/containernetworking/cni.git;nobranch=1;name=cni;protocol=https \
+        git://github.com/containernetworking/plugins.git;nobranch=1;destsuffix=plugins;name=plugins;protocol=https \
 	"
 
 RPROVIDES_${PN} += "kubernetes-cni"

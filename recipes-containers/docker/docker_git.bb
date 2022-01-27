@@ -22,9 +22,9 @@ SRCREV_docker = "708b068d3095c6a6be939eb2da78c921d2e945e2"
 SRCREV_libnetwork = "4cb38c2987c236dce03c868d99b57b1e28a4b81c"
 SRCREV_cli = "0f1bb353423e45e02315e985bd9ddebe6da18457"
 SRC_URI = "\
-	git://github.com/moby/moby.git;nobranch=1;name=docker \
-	git://github.com/docker/libnetwork.git;branch=master;name=libnetwork;destsuffix=git/libnetwork \
-	git://github.com/docker/cli;branch=master;name=cli;destsuffix=git/cli \
+	git://github.com/moby/moby.git;nobranch=1;name=docker;protocol=https \
+	git://github.com/docker/libnetwork.git;branch=master;name=libnetwork;destsuffix=git/libnetwork;protocol=https \
+	git://github.com/docker/cli;branch=master;name=cli;destsuffix=git/cli;protocol=https \
 	file://docker.init \
 	file://hi.Dockerfile \
         file://0001-libnetwork-use-GO-instead-of-go.patch \
