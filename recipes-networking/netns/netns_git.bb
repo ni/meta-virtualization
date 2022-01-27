@@ -3,7 +3,7 @@ SUMMARY = "Runc hook for setting up default bridge networking."
 LICENSE = "MIT"
 LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=48ef0979a2bcc3fae14ff30b8a7f5dbf"
 
-SRC_URI = "git://github.com/genuinetools/netns;branch=master \
+SRC_URI = "git://github.com/genuinetools/netns;branch=master;protocol=https \
            file://0001-Allow-selection-of-go-compiler.patch \
           "
 SRCREV = "0da6ab0997707024debe68c91e940c9168041bf8"

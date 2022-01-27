@@ -12,7 +12,7 @@ DEPENDS = "\
            spf13-pflag \
           "
 
-SRC_URI = "git://github.com/opencontainers/image-tools.git \
+SRC_URI = "git://github.com/opencontainers/image-tools.git;protocol=https \
            file://0001-image-manifest-Recursively-remove-pre-existing-entri.patch \
            file://0002-image-manifest-Split-unpackLayerEntry-into-its-own-f.patch \
            file://0001-config-make-Config.User-mapping-errors-a-warning.patch"

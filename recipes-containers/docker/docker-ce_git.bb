@@ -22,9 +22,9 @@ SRCREV_docker = "0520e243029d1361649afb0706a1c5d9a1c012b8"
 SRCREV_libnetwork = "4cb38c2987c236dce03c868d99b57b1e28a4b81c"
 SRCREV_cli = "0f1bb353423e45e02315e985bd9ddebe6da18457"
 SRC_URI = "\
-	git://github.com/docker/docker-ce.git;nobranch=1;name=docker \
-	git://github.com/docker/libnetwork.git;branch=master;name=libnetwork;destsuffix=libnetwork \
-	git://github.com/docker/cli;branch=master;name=cli;destsuffix=cli \
+	git://github.com/docker/docker-ce.git;nobranch=1;name=docker;protocol=https \
+	git://github.com/docker/libnetwork.git;branch=master;name=libnetwork;destsuffix=libnetwork;protocol=https \
+	git://github.com/docker/cli;branch=master;name=cli;destsuffix=cli;protocol=https \
 	file://docker.init \
 	file://hi.Dockerfile \
 	"
