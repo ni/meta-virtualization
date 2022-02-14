@@ -18,7 +18,7 @@ What is not in scope for this project? \
 
 SRCREV_cri-tools = "ec9e336fd8c21c4bab89a6aed2c4a138c8cfae75"
 SRC_URI = "\
-	git://github.com/kubernetes-sigs/cri-tools.git;branch=master;name=cri-tools \
+	git://github.com/kubernetes-sigs/cri-tools.git;branch=master;name=cri-tools;protocol=https \
         file://0001-build-allow-environmental-CGO-settings-and-pass-dont.patch \
 	"
 

@@ -1,4 +1,4 @@
-HOMEPAGE = "git://github.com/kubernetes/kubernetes;branch=master"
+HOMEPAGE = "git://github.com/kubernetes/kubernetes;branch=master;protocol=https"
 SUMMARY = "Production-Grade Container Scheduling and Management"
 DESCRIPTION = "Kubernetes is an open source system for managing containerized \
 applications across multiple hosts, providing basic mechanisms for deployment, \
@@ -10,8 +10,8 @@ SRCREV_kubernetes = "7a576bc3935a6b555e33346fd73ad77c925e9e4a"
 SRCREV_kubernetes-release = "cf1e18a801c2ec6cc8c3d3b83bf1cbc4cf0dbc53"
 SRCREV_FORMAT ?= "kubernetes_release"
 
-SRC_URI = "git://github.com/kubernetes/kubernetes.git;branch=release-1.20;name=kubernetes \
-           git://github.com/kubernetes/release;branch=master;name=kubernetes-release;destsuffix=git/release \
+SRC_URI = "git://github.com/kubernetes/kubernetes.git;branch=release-1.20;name=kubernetes;protocol=https \
+           git://github.com/kubernetes/release;branch=master;name=kubernetes-release;destsuffix=git/release;protocol=https \
            file://0001-hack-lib-golang.sh-use-CC-from-environment.patch \
            file://0001-cross-don-t-build-tests-by-default.patch \
            file://0001-generate-bindata-unset-GOBIN.patch \
