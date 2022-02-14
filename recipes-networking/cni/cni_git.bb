@@ -13,8 +13,8 @@ SRCREV_cni = "b5ab16f010e822936eb974690ecec38ba69afc01"
 # Version 0.8.5
 SRCREV_plugins = "fa48f7515b50272b7106702a662fadbf2ead3d18"
 SRC_URI = "\
-	git://github.com/containernetworking/cni.git;nobranch=1;name=cni \
-        git://github.com/containernetworking/plugins.git;nobranch=1;destsuffix=${S}/src/github.com/containernetworking/plugins;name=plugins \
+	git://github.com/containernetworking/cni.git;nobranch=1;name=cni;protocol=https \
+        git://github.com/containernetworking/plugins.git;nobranch=1;destsuffix=${S}/src/github.com/containernetworking/plugins;name=plugins;protocol=https \
 	"
 SRCREV_FORMAT = "cni_plugins"
 

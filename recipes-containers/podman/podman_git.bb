@@ -18,7 +18,7 @@ PNBLACKLIST[podman] ?= "${@bb.utils.contains('BBFILE_COLLECTIONS', 'security', '
 
 SRCREV = "ab4d0cf908e9d24d321b52b419ebfb4ab5802029"
 SRC_URI = " \
-    git://github.com/containers/libpod.git;branch=v3.2 \
+    git://github.com/containers/libpod.git;branch=v3.2;protocol=https \
 "
 
 LICENSE = "Apache-2.0"
