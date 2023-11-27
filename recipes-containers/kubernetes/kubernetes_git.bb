@@ -26,10 +26,12 @@ SRC_URI = "git://github.com/kubernetes/kubernetes.git;branch=release-1.23;name=k
            git://github.com/kubernetes/release;branch=master;name=kubernetes-release;destsuffix=git/release;protocol=https"
 
 SRC_URI:append = " \
-           file://0001-hack-lib-golang.sh-use-CC-from-environment.patch \
-           file://0001-cross-don-t-build-tests-by-default.patch \
-           file://0001-build-golang.sh-convert-remaining-go-calls-to-use.patch \
-           file://0001-Makefile.generated_files-Fix-race-issue-for-installi.patch \
+           file://0001-hack-lib-golang.sh-use-CC-from-environment.patch;patchdir=src/import \
+           file://0001-cross-don-t-build-tests-by-default.patch;patchdir=src/import \
+           file://0001-build-golang.sh-convert-remaining-go-calls-to-use.patch;patchdir=src/import \
+           file://0001-Makefile.generated_files-Fix-race-issue-for-installi.patch;patchdir=src/import \
+           file://CVE-2023-2431.patch;patchdir=src/import \
+           file://CVE-2023-2727-CVE-2023-2728.patch;patchdir=src/import \
            file://cni-containerd-net.conflist \
            file://k8s-init \
            file://99-kubernetes.conf \
