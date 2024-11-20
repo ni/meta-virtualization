@@ -1,0 +1,23 @@
+From 5fc4d96e45904ffc24f151809345f06223e87d48 Mon Sep 17 00:00:00 2001
+From: Can Wong <can.wong@ni.com>
+Date: Thu, 21 Nov 2024 11:47:48 -0600
+Subject: [PATCH] buildx: use GO instead of go and remove mod vendor
+
+Signed-off-by: Can Wong <can.wong@ni.com>
+---
+ hack/build | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/hack/build b/hack/build
+index 7c23dc10..cd707ec2 100755
+--- a/hack/build
++++ b/hack/build
+@@ -14,4 +14,4 @@ set -e
+ : "${GO_EXTRA_LDFLAGS=}"
+ 
+ set -x
+-CGO_ENABLED=$CGO_ENABLED go build -mod vendor -trimpath ${GO_EXTRA_FLAGS} -ldflags "${GO_LDFLAGS} ${GO_EXTRA_LDFLAGS}" -o "${DESTDIR}/docker-buildx" ./cmd/buildx
++CGO_ENABLED=$CGO_ENABLED ${GO} build -trimpath ${GO_EXTRA_FLAGS} -ldflags "${GO_LDFLAGS} ${GO_EXTRA_LDFLAGS}" -o "${DESTDIR}/docker-buildx" ./cmd/buildx
+-- 
+2.43.0
+
