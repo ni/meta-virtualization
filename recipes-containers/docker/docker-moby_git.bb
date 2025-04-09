@@ -59,6 +59,8 @@ SRC_URI = "\
 	file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
 	file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \
 	file://0001-buildx-use-GO-instead-of-go-and-remove-mod-vendor.patch;patchdir=buildx \
+	file://CVE-2024-36620.patch;patchdir=src/import \
+	file://CVE-2024-36621.patch;patchdir=src/import \
 	"
 
 DOCKER_COMMIT = "${SRCREV_moby}"
