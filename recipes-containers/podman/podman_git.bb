@@ -21,8 +21,9 @@ SRCREV = "bb81e85a430fa95d23a15b77c717fd68bf06ebf2"
 SRC_URI = " \
     git://github.com/containers/libpod.git;branch=v5.0;protocol=https \
     ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'file://50-podman-rootless.conf', '', d)} \
-    file://run-ptest \
     file://0001-Use-securejoin.SecureJoin-when-forming-userns-paths.patch;patchdir=src/import/vendor/github.com/containers/storage \
+    file://CVE-2025-6032.patch;patchdir=src/import \
+    file://CVE-2024-9341.patch;patchdir=src/import \
 "
 
 LICENSE = "Apache-2.0"
@@ -56,7 +57,7 @@ TOOLCHAIN = "gcc"
 export BUILDFLAGS="${GOBUILDFLAGS}"
 
 inherit go goarch
-inherit systemd pkgconfig ptest
+inherit systemd pkgconfig
 
 do_configure[noexec] = "1"
 
@@ -121,17 +122,6 @@ do_install() {
 	fi
 }
 
-do_install_ptest () {
-	cp ${S}/src/import/Makefile ${D}${PTEST_PATH}
-	install -d ${D}${PTEST_PATH}/test
-	cp -r ${S}/src/import/test/system ${D}${PTEST_PATH}/test
-
-	# Some compatibility links for the Makefile assumptions.
-	install -d ${D}${PTEST_PATH}/bin
-	ln -s ${bindir}/podman ${D}${PTEST_PATH}/bin/podman
-	ln -s ${bindir}/podman-remote ${D}${PTEST_PATH}/bin/podman-remote
-}
-
 FILES:${PN} += " \
     ${systemd_unitdir}/system/* \
     ${nonarch_libdir}/systemd/* \
@@ -162,16 +152,3 @@ RRECOMMENDS:${PN} += "slirp4netns \
                       kernel-module-xt-tcpudp \
                       "
 RCONFLICTS:${PN} = "${@bb.utils.contains('PACKAGECONFIG', 'docker', 'docker', '', d)}"
-
-RDEPENDS:${PN}-ptest += " \
-	bash \
-	bats \
-	buildah \
-	catatonit \
-	coreutils \
-	file \
-	gnupg \
-	jq \
-	make \
-	tar \
-"

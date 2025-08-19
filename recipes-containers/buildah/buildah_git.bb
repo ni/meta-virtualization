@@ -35,6 +35,7 @@ SRC_URI = " \
     git://github.com/containers/buildah;branch=release-1.34;name=buildah;protocol=https \
     file://0001-Use-securejoin.SecureJoin-when-forming-userns-paths.patch;patchdir=src/github.com/containers/buildah/vendor/github.com/containers/storage \
     file://CVE-2024-9675.patch;patchdir=src/github.com/containers/buildah \
+    file://CVE-2024-9341.patch;patchdir=src/github.com/containers/buildah \
     "
 
 DEPENDS = "libdevmapper btrfs-tools gpgme"
