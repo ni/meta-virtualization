@@ -57,6 +57,7 @@ TOOLCHAIN = "gcc"
 export BUILDFLAGS="${GOBUILDFLAGS}"
 
 inherit go goarch
+inherit container-host
 inherit systemd pkgconfig
 
 do_configure[noexec] = "1"
@@ -119,6 +120,11 @@ do_install() {
 	if ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'true', 'false', d)}; then
 		install -d "${D}${sysconfdir}/sysctl.d"
 		install -m 0644 "${WORKDIR}/50-podman-rootless.conf" "${D}${sysconfdir}/sysctl.d"
+		install -d "${D}${sysconfdir}/containers"
+		cat <<-EOF >> "${D}${sysconfdir}/containers/containers.conf"
+		[NETWORK]
+		default_rootless_network_cmd="slirp4netns"
+		EOF
 	fi
 }
 
@@ -140,7 +146,7 @@ VIRTUAL-RUNTIME_base-utils-nsenter ?= "util-linux-nsenter"
 COMPATIBLE_HOST = "^(?!mips).*"
 
 RDEPENDS:${PN} += "\
-	conmon ${VIRTUAL-RUNTIME_container_runtime} iptables ${VIRTUAL-RUNTIME_container_networking} skopeo ${VIRTUAL-RUNTIME_base-utils-nsenter} \
+	catatonit conmon ${VIRTUAL-RUNTIME_container_runtime} iptables libdevmapper ${VIRTUAL-RUNTIME_container_networking} ${VIRTUAL-RUNTIME_base-utils-nsenter} \
 	${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'fuse-overlayfs slirp4netns', '', d)} \
 "
 RRECOMMENDS:${PN} += "slirp4netns \

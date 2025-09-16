@@ -43,3 +43,8 @@ FILES:${PN} += " \
 # some CVEs are reported with "cpe:2.3:a:grpc:grpc:*:*:*:*:*:go:*:*"
 # it's better to have false positives than false negatives
 CVE_PRODUCT += "grpc"
+# CVE-2024-7246 is an HTTP/2 HPACK poisoning issue in gRPC C-core
+# (C/C++ implementation, meta-openembedded).
+# grpc-go (Go implementation in meta-virtualization) does not
+# contain the affected HPACK code path.
+CVE_STATUS[CVE-2024-7246] = "not-applicable-config: CVE is for grpc (C-core), not grpc-go."

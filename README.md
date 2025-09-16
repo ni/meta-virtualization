@@ -28,7 +28,7 @@ that may also be enabled:
 
  - xen: enables xen functionality in various packages (kernel, libvirt, etc)
  - kvm: enables KVM configurations in the kernel and autoloads modules
- - k8s: enables kubernets configurations in the kernel, tools and configuration
+ - k8s: enables kubernetes configurations in the kernel, tools and configuration
  - aufs: enables aufs support in docker and linux-yocto
  - x11: enable xen and libvirt functionality related to x11
  - selinux: enables functionality in libvirt and lxc
@@ -71,7 +71,7 @@ branch: master
 revision: HEAD
 prio: default
 
-Community / Colaboration
+Community / Collaboration
 ------------------------
 
 Repository: https://git.yoctoproject.org/cgit/cgit.cgi/meta-virtualization/
