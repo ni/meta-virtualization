@@ -61,6 +61,7 @@ SRC_URI = "\
 	file://0001-buildx-use-GO-instead-of-go-and-remove-mod-vendor.patch;patchdir=buildx \
 	file://CVE-2024-36620.patch;patchdir=src/import \
 	file://CVE-2024-36621.patch;patchdir=src/import \
+	file://CVE-2024-36623.patch;patchdir=src/import \
 	"
 
 DOCKER_COMMIT = "${SRCREV_moby}"
