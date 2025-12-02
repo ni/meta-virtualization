@@ -14,6 +14,7 @@ SRC_URI = "git://git.kernel.org/pub/scm/linux/kernel/git/will/kvmtool.git;branch
            file://0001-kvmtool-9p-fixed-compilation-error.patch \
            file://0002-kvmtool-add-EXTRA_CFLAGS-variable.patch \
            file://0003-kvmtool-Werror-disabled.patch \
+           file://0004-remove-wordsize.h-inclusion-for-musl-compatibility.patch \
            "
 
 SRCREV = "4d2c017f41533b0e51e00f689050c26190a15318"

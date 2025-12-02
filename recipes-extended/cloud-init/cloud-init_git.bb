@@ -12,6 +12,7 @@ SRC_URI = "git://github.com/canonical/cloud-init;branch=24.1.x;protocol=https \
     file://cloud-init-source-local-lsb-functions.patch \
     file://0001-setup.py-check-for-install-anywhere-in-args.patch \
     file://CVE-2024-6174.patch \
+    file://CVE-2024-11584.patch \
 "
 
 PV = "v23.4.1+git"

@@ -35,6 +35,7 @@ SRC_URI:append = " \
            file://k8s-init \
            file://99-kubernetes.conf \
            file://CVE-2025-5187.patch \
+           file://CVE-2024-10220.patch \
           "
 
 DEPENDS += "rsync-native \
