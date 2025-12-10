@@ -102,10 +102,6 @@ do_compile() {
 	export DOCKER_VERSION=${DOCKER_VERSION}
 	VERSION="${DOCKER_VERSION}" DOCKER_GITCOMMIT="${DOCKER_COMMIT}" make dynbinary
 
-	# build the proxy
-	cd ${S}/src/import/.gopath/src/github.com/docker/libnetwork
-	oe_runmake cross-local
-
 	# build the buildx
 	cd ${S}/src/import/.gopath/src/github.com/docker/buildx
 	VERSION="${DOCKER_VERSION}" DOCKER_GITCOMMIT="${DOCKER_COMMIT}" make build
