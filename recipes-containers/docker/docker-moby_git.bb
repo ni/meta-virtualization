@@ -51,7 +51,7 @@ SRCREV_FORMAT = "moby"
 SRC_URI = "\
 	git://github.com/moby/moby.git;nobranch=1;name=moby;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
 	git://github.com/docker/cli.git;nobranch=1;name=cli;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/cli;protocol=https \
-	git://github.com/docker/buildx.git;branch=v0.18;name=buildx;destsuffix=git/buildx;protocol=https \
+	git://github.com/docker/buildx.git;branch=v0.18;name=buildx;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/buildx;protocol=https \
 	file://docker.init \
 	file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
 	file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \

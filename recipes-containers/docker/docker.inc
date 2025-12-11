@@ -135,7 +135,7 @@ do_install() {
 	install -m 0755 ${S}/src/import/contrib/check-config.sh ${D}${datadir}/docker/
 
 	mkdir -p ${D}/${libexecdir}/docker/cli-plugins
-	cp ${WORKDIR}/git/buildx/bin/build/docker-buildx ${D}/${libexecdir}/docker/cli-plugins/docker-buildx
+	cp ${S}/buildx/bin/build/docker-buildx ${D}/${libexecdir}/docker/cli-plugins/docker-buildx
 	install -d ${D}/${libexecdir}/docker/cli-plugins
 }
 
