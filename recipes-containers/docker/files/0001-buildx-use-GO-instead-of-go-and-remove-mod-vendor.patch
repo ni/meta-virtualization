@@ -3,7 +3,11 @@ From: Can Wong <can.wong@ni.com>
 Date: Thu, 21 Nov 2024 11:47:48 -0600
 Subject: [PATCH] buildx: use GO instead of go and remove mod vendor
 
+Upstream-Status: Pending
+
 Signed-off-by: Can Wong <can.wong@ni.com>
+[shubhanshumt26: Added Upstream-Status tag]
+Signed-off-by: Shubhanshu Mani Tripathi <shubhanshu.mani.tripathi@emerson.com>
 ---
  hack/build | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
