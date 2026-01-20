@@ -10,19 +10,19 @@ Signed-off-by: Chen Qi <Qi.Chen@windriver.com>
 [bva: refreshed for release 1.0.2]
 Signed-off-by: Bruce Ashfield <bruce.ashfield@gmail.com>
 ---
- Makefile | 3 +--
- 1 file changed, 1 insertion(+), 2 deletions(-)
+ Makefile | 2 +--
+ 1 file changed, 1 insertion(+), 1 deletions(-)
 
 Index: git/src/import/Makefile
 ===================================================================
 --- git.orig/src/import/Makefile
 +++ git/src/import/Makefile
-@@ -24,7 +24,7 @@
+@@ -36,7 +36,7 @@ ifneq (,$(filter $(GOARCH),386 amd64 arm arm64 ppc64le riscv64 s390x))
  		GO_BUILDMODE := "-buildmode=pie"
  	endif
  endif
--GO_BUILD := $(GO) build -trimpath $(GO_BUILDMODE) \
-+GO_BUILD := $(GO) build $(GOBUILDFLAGS) -trimpath $(GO_BUILDMODE) \
+-GO_BUILD := $(GO) build $(TRIMPATH) $(GO_BUILDMODE) \
++GO_BUILD := $(GO) build $(GOBUILDFLAGS) $(TRIMPATH) $(GO_BUILDMODE) \
  	$(EXTRA_FLAGS) -tags "$(BUILDTAGS)" \
  	-ldflags "$(LDFLAGS_COMMON) $(EXTRA_LDFLAGS)"
  
