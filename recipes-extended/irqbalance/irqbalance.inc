@@ -14,6 +14,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=94d55d512a9ba36caa9b7df079bae19f \
 		   "
 
 DEPENDS = "glib-2.0"
+DEPENDS += "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'systemd', '', d)}"
 
 INITSCRIPT_NAME = "irqbalanced"
 INITSCRIPT_PARAMS = "defaults"
@@ -21,26 +22,29 @@ INITSCRIPT_PARAMS = "defaults"
 inherit autotools update-rc.d pkgconfig systemd
 
 SYSTEMD_PACKAGES = "irqbalance"
-SYSTEMD_SERVICE:irqbalance = "irqbalanced.service"
+SYSTEMD_SERVICE:irqbalance = "irqbalance.service"
 
 EXTRA_OECONF = "--program-transform-name= \
 	       "
 
 # let the recipes or appends define options
 #
-PACKAGECONFIG ?= ""
-
+PACKAGECONFIG ?= "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'systemd', '', d)}"
 # enable,disable,depends,rdepends
 #
 PACKAGECONFIG[numa] = "--enable-numa,--disable-numa,numactl,"
 PACKAGECONFIG[libcap-ng] = "--with-libcap-ng,--without-libcap-ng,libcap-ng,"
+PACKAGECONFIG[systemd] = "--with-systemd --with-pkgconfdir=${sysconfdir},,,"
 
 do_install () {
         oe_runmake 'DESTDIR=${D}' install
-        install -d ${D}${sysconfdir}/init.d
-        cat ${S}/irqbalance.init | sed -e's,/usr/sbin,${sbindir},g' > ${D}${sysconfdir}/init.d/irqbalanced
-        chmod 755 ${D}${sysconfdir}/init.d/irqbalanced
 
-        install -d ${D}${systemd_unitdir}/system
-        install -m 0644 ${S}/misc/irqbalance.service ${D}${systemd_unitdir}/system/irqbalanced.service
+	if ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}; then
+		install -d ${D}${systemd_unitdir}/system
+	else
+		install -d ${D}${sysconfdir}/init.d
+		cat ${S}/irqbalance.init | sed -e's,/usr/sbin,${sbindir},g' > ${D}${sysconfdir}/init.d/irqbalanced
+		chmod 755 ${D}${sysconfdir}/init.d/irqbalanced
+	fi
 }
+

@@ -26,47 +26,8 @@ IMAGE_INSTALL:append = " systemd"
 IMAGE_INSTALL:append = " packagegroup-core-base-utils"
 IMAGE_INSTALL:append = " packagegroup-core-ssh-openssh"
 IMAGE_INSTALL:append = " busybox"
+IMAGE_INSTALL:append = " container-systemd-config"
 
 IMAGE_FEATURES ?= ""
 
 NO_RECOMMENDATIONS = "1"
-
-SERVICES_TO_DISABLE ?= " \
-    systemd-udevd.service \
-    systemd-udevd-control.socket \
-    systemd-udevd-kernel.socket \
-    proc-sys-fs-binfmt_misc.automount \
-    sys-fs-fuse-connections.mount \
-    sys-kernel-debug.mount \
-    systemd-hwdb-update.service \
-    serial-getty@ttyS0.service \
-    dev-ttyS0.device \
-    console-getty.service \
-    serial-getty@.service \
-"
-
-SERVICES_TO_ENABLE ?= ""
-
-disable_systemd_services () {
-	SERVICES_TO_DISABLE="${SERVICES_TO_DISABLE}"
-	if [ -n "$SERVICES_TO_DISABLE" ]; then
-		echo "Disabling systemd services:"
-		for service in $SERVICES_TO_DISABLE; do
-			echo "    $service"
-			systemctl --root="${IMAGE_ROOTFS}" mask $service > /dev/null >1
-		done
-	fi
-}
-
-enable_systemd_services () {
-	SERVICES_TO_ENABLE="${SERVICES_TO_ENABLE}"
-	if [ -n "$SERVICES_TO_ENABLE" ]; then
-		echo "Enabling additional systemd services:"
-		for service in $SERVICES_TO_ENABLE; do
-			echo "    $service"
-			systemctl --root="${IMAGE_ROOTFS}" enable $service > /dev/null >1
-		done
-	fi
-}
-
-ROOTFS_POSTPROCESS_COMMAND += "disable_systemd_services; enable_systemd_services;"

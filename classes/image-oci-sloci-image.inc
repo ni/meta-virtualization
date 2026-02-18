@@ -72,18 +72,19 @@ IMAGE_CMD:oci() {
     fi
 
     # create a convenience symlink
-    ln -sf ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci
+    # Use -n to avoid creating link inside existing symlink target directory
+    ln -sfn ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci
 
     if [ -n "${OCI_IMAGE_TAR_OUTPUT}" ]; then
 	# move the sloci output to a naming convention that matches what we do with umoci, thie
 	# default creates a subdirectory, so it get the "-dir" in the name
 	mv ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-image.tar ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-dir.tar
-	ln -sf ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-dir.tar ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci-dir.tar
+	ln -sfn ${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-dir.tar ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci-dir.tar
 
 	(
 	    cd "${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci"
 	    tar -cf ../"${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-image.tar" "."
 	)
-	ln -sf "${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-image.tar" ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci.tar
+	ln -sfn "${IMAGE_NAME}${IMAGE_NAME_SUFFIX}-oci-${OCI_IMAGE_TAG}-${OCI_IMAGE_ARCH}-linux.oci-image.tar" ${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci.tar
     fi
 }

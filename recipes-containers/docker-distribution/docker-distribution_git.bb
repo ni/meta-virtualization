@@ -3,11 +3,10 @@ SUMMARY = "The Docker toolset to pack, ship, store, and deliver content"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=d2794c0df5b907fdace235a619d80314"
 
-SRCREV_distribution = "da404778edd3faa665e48ca3bb791b6144f3355e"
+SRCREV_distribution = "76fe6170526f0a1046c340c20b041a090d8dbfc9"
 SRC_URI = "git://github.com/docker/distribution.git;branch=main;name=distribution;destsuffix=git/src/github.com/distribution/distribution/v3;protocol=https \
            file://docker-registry.service \
            file://0001-build-use-to-use-cross-go-compiler.patch \
-           file://0001-s3-aws-fix-build-for-386.patch \
           "
 
 PACKAGES =+ "docker-registry"
@@ -76,3 +75,4 @@ SYSTEMD_AUTO_ENABLE:docker-registry = "enable"
 RDEPENDS:${PN}-ptest:remove = "${PN}"
 
 CVE_PRODUCT = "docker_registry"
+BBCLASSEXTEND = "native"

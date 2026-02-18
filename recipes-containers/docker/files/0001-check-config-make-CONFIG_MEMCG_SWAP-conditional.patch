@@ -40,14 +40,16 @@ Index: import/contrib/check-config.sh
 ===================================================================
 --- import.orig/contrib/check-config.sh
 +++ import/contrib/check-config.sh
-@@ -246,7 +246,9 @@ echo 'Optional Features:'
- 	check_flags CGROUP_PIDS
+@@ -253,9 +253,11 @@ echo 'Optional Features:'
+ 	check_flags SECCOMP_FILTER
  }
  {
--	check_flags MEMCG_SWAP
+-	check_flags CGROUP_PIDS
 +	if [ "$kernelMajor" -lt 6 ] || [ "$kernelMajor" -eq 6 -a "$kernelMinor" -le 1 ]; then
-+		check_flags MEMCG_SWAP
++		check_flags CGROUP_PIDS
+ }
+ {
 +	fi
- 	# Kernel v5.8+ removes MEMCG_SWAP_ENABLED.
- 	if [ "$kernelMajor" -lt 5 ] || [ "$kernelMajor" -eq 5 -a "$kernelMinor" -le 8 ]; then
+ 	# Kernel v5.8+ removes MEMCG_SWAP_ENABLED and deprecates MEMCG_SWAP.
+ 	if [ "$kernelMajor" -lt 5 ] || [ "$kernelMajor" -eq 5 -a "$kernelMinor" -lt 8 ]; then
  		CODE=${EXITCODE}

@@ -16,7 +16,7 @@ What is not in scope for this project? \
     non-exist on the kube-apiserver. \
  "
 
-SRCREV_cri-tools = "0cf370b13928d79146916fd9accbbc69f64a92b5"
+SRCREV_cri-tools = "80b852a5a6762bf6dda6e5a1dcddb69f17b38f53"
 SRC_URI = "\
 	git://github.com/kubernetes-sigs/cri-tools.git;branch=master;name=cri-tools;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
         file://0001-build-allow-environmental-CGO-settings-and-pass-dont.patch \
@@ -27,7 +27,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=e3fc50a88d0a364313df4b21ef20c2
 
 GO_IMPORT = "import"
 
-PV = "1.33.0+git${SRCREV_cri-tools}"
+PV = "1.34.0+git"
 
 RPROVIDES:${PN} += "crictl"
 PACKAGES =+ "${PN}-critest"
@@ -50,8 +50,8 @@ do_compile() {
 	export GOARCH="${TARGET_GOARCH}"
 	# Pass the needed cflags/ldflags so that cgo can find the needed headers files and libraries
 	export CGO_ENABLED="1"
-	export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-	export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_LDFLAGS="${LDFLAGS}"
 	export CFLAGS=""
 	export LDFLAGS=""
 	export CC="${CC}"

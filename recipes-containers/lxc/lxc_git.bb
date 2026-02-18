@@ -45,12 +45,13 @@ SRC_URI = "git://github.com/lxc/lxc.git;branch=stable-6.0;protocol=https \
 	file://0001-download-don-t-try-compatbility-index.patch \
 	file://tests-our-init-is-not-busybox.patch \
 	file://0001-template-if-busybox-contains-init-use-it-in-containe.patch \
+	file://0001-build-Check-if-P_PIDFD-is-defined.patch \
 	file://dnsmasq.conf \
 	file://lxc-net \
 	"
 
-SRCREV = "b185e523fc43538b7f9cc5aba2db230e112c6bc4"
-PV = "v6.0.4"
+SRCREV = "f9ff9ea2a92653a823edf25e8e28c9dab08b3090"
+PV = "v6.0.5"
 
 # Let's not configure for the host distro.
 #
@@ -61,6 +62,9 @@ PTEST_CONF = "${@bb.utils.contains('DISTRO_FEATURES', 'ptest', '-Dtests=true', '
 EXTRA_OEMESON += "${PTEST_CONF} -Ddistrosysconfdir=${sysconfdir}/default"
 # No meson equivalent for these yet
 # EXTRA_OECONF += "--enable-log-src-basename --disable-werror"
+
+# LTO is enabled by default, expose prefix-map options to the linker for reproducibility
+TARGET_LDFLAGS:append = " ${DEBUG_PREFIX_MAP}"
 
 PACKAGECONFIG ??= "templates \
     ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'systemd', '', d)} \
@@ -140,7 +144,7 @@ do_install:append() {
 
 	if "${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'true', 'false', d)}"; then
 	    # nothing special for systemd at the moment
-	    true
+	    (cd ${D}${localstatedir}; [ -d lib/lxc ] && rmdir -v --parents lib/lxc)
 	else
 	    # with meson, these aren't built unless sysvinit is the enabled
 	    # init system.

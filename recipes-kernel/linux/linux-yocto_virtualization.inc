@@ -11,6 +11,36 @@ KERNEL_FEATURES:append = "${@bb.utils.contains('DISTRO_FEATURES', 'aufs', ' feat
 # Always add a local/layer fragment for easy debug and enabling of options
 SRC_URI += "file://extra-configs.cfg"
 
+# Inject the kcfg sysroot root into the scc search path so compound .scc
+# files (like container.scc) can resolve their include directives.
+# kernel-yocto.bbclass adds type=kmeta directories to -I includes via
+# find_kernel_feature_dirs/feat_dirs. The prefunc replaces the placeholder
+# directory with a symlink to the kcfg sysroot so that spp can resolve
+# include directives within .scc files that reference other fragments
+# by relative path (e.g. "include cfg/9p.scc" inside container.scc).
+SRC_URI:append = " file://kcfg-search-path;type=kmeta;destsuffix=kcfg-sysroot"
+
+python inject_kcfg_search_path() {
+    import os, shutil
+
+    unpackdir = d.getVar('UNPACKDIR')
+    workdir = d.getVar('WORKDIR')
+    search_dir = os.path.join(unpackdir, 'kcfg-sysroot')
+    kcfg_sysroot = os.path.join(workdir, 'recipe-sysroot-native', 'kcfg')
+
+    if os.path.isdir(kcfg_sysroot):
+        if os.path.isdir(search_dir) and not os.path.islink(search_dir):
+            shutil.rmtree(search_dir)
+        if os.path.islink(search_dir) or not os.path.exists(search_dir):
+            if os.path.islink(search_dir):
+                os.unlink(search_dir)
+            os.symlink(kcfg_sysroot, search_dir)
+    else:
+        bb.warn("kcfg sysroot not found at %s" % kcfg_sysroot)
+}
+
+do_kernel_metadata[prefuncs] += "inject_kcfg_search_path"
+
 # if the kernel-yocto meta-data routine automatically starts to add the
 # recipe-sysroot-native, we can do away with this conditional, since all
 # features will be found at the same relative offset from a search
@@ -79,3 +109,6 @@ KERNEL_FEATURES:append = "${@distro_cond_feature('cfg/kubernetes.scc', 'k3s', d 
 
 # selinux
 KERNEL_FEATURES:append = "${@distro_cond_feature('cgl/features/selinux/selinux.cfg', 'selinux', d )}"
+
+# vcontainer
+KERNEL_FEATURES:append = "${@distro_cond_feature('cfg/container.scc', 'vcontainer', d)}"

@@ -3,14 +3,14 @@ HOMEPAGE = "https://virt-manager.org/"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 DEPENDS += "python3-docutils-native python3-pylint"
-SRCREV = "4f9618289f279f86994a5d2f1aada8a6524f5a6f"
+SRCREV = "35ad9057fef319046ad1348097e2f813a52a9021"
 
 SRC_URI = " \
   git://github.com/virt-manager/virt-manager;branch=main;protocol=https \
   file://0001-build-drop-man-directory.patch \
 "
 
-PV = "v5.0.0+git"
+PV = "v5.1.0+git"
 
 PACKAGECONFIG ??= "gui"
 PACKAGECONFIG[gui] = ",-Dupdate-icon-cache=false -Dcompile-schemas=false,python3-pygobject"
@@ -33,7 +33,6 @@ RDEPENDS:${PN}-common += " \
 RDEPENDS:${PN} = " \
   ${PN}-common \
   libvirt-glib \
-  libxml2-python \
   gdk-pixbuf \
   gtk+3 \
   hicolor-icon-theme \
@@ -43,7 +42,6 @@ RDEPENDS:${PN} = " \
 RDEPENDS:${PN}-install = " \
   ${PN}-common \
   libvirt-virsh \
-  libxml2-python \
   python3-pygobject \
   python3-requests \
 "

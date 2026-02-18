@@ -4,13 +4,12 @@
 
 require irqbalance.inc
 
-SRCREV = "b3adb5fd1496833e4e2cebc958d3919178cd5e3d"
-PV = "1.8.0+git"
+SRCREV = "4c234853d5ac9f13d8fe6b618d41a44161de509b"
+PV = "1.9.4+git"
 
 SRC_URI = "git://github.com/Irqbalance/irqbalance;branch=master;protocol=https \
            file://add-initscript.patch \
            file://irqbalance-Add-status-and-reload-commands.patch \
-           file://0001-add-void-to-fix-strict-prototypes.patch \
           "
 
 CFLAGS += "-Wno-error=format-security"

@@ -3,6 +3,8 @@ DEPENDS = " \
     sqlite3 \
     libtool-native \
     libtool \
+    nftables \
+    libnftnl \
     "
 
 DEPENDS:append:class-target = " lvm2"
@@ -57,7 +59,7 @@ do_configure[noexec] = "1"
 # Export for possible use in Makefiles, default value comes from go.bbclass
 export GO_LINKSHARED
 
-DOCKER_PKG = "github.com/docker/docker"
+DOCKER_PKG = "github.com/moby/moby/v2"
 # in order to exclude devicemapper and btrfs - https://github.com/docker/docker/issues/14056
 BUILD_TAGS ?= "exclude_graphdriver_btrfs exclude_graphdriver_devicemapper"
 
@@ -68,7 +70,7 @@ do_compile() {
 	cd ${S}/src/import
 	rm -rf .gopath
 	mkdir -p .gopath/src/"$(dirname "${DOCKER_PKG}")"
-	ln -sf ../../../.. .gopath/src/"${DOCKER_PKG}"
+	ln -sf ../../../../.. .gopath/src/"${DOCKER_PKG}"
 
 	mkdir -p .gopath/src/github.com/docker
 	ln -sf ${S}/cli .gopath/src/github.com/docker/cli
@@ -81,12 +83,13 @@ do_compile() {
 	# can find the needed headers files and libraries
 	export GOARCH=${TARGET_GOARCH}
 	export CGO_ENABLED="1"
-	export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-	export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_LDFLAGS="${LDFLAGS}"
 	export DOCKER_BUILDTAGS='${BUILD_TAGS} ${PACKAGECONFIG_CONFARGS}'
 	export GO111MODULE=off
 
 	export DISABLE_WARN_OUTSIDE_CONTAINER=1
+	export BUILDFLAGS="-trimpath"
 
 	cd ${S}/src/import
 
@@ -95,11 +98,12 @@ do_compile() {
 	# to build this:
 	VERSION="${DOCKER_VERSION}" DOCKER_GITCOMMIT="${DOCKER_COMMIT}" ./hack/make.sh dynbinary
 
-	# build the cli
-	cd ${S}/src/import/.gopath/src/github.com/docker/cli
+        # build the cli
+	cd ${S}/cli
 	export CFLAGS=""
 	export LDFLAGS=""
 	export DOCKER_VERSION=${DOCKER_VERSION}
+	export BUILDFLAGS="-trimpath"
 	VERSION="${DOCKER_VERSION}" DOCKER_GITCOMMIT="${DOCKER_COMMIT}" make dynbinary
 
 	# build the buildx

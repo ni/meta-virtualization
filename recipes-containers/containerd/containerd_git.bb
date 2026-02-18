@@ -5,8 +5,8 @@ DESCRIPTION = "containerd is a daemon to control runC, built for performance and
                support as well as checkpoint and restore for cloning and live migration of containers."
 
 
-SRCREV = "30bd62aac620aa34e6fcb826f011a41f9ca16aa1"
-SRC_URI = "git://github.com/containerd/containerd;branch=release/2.1;protocol=https;destsuffix=git/src/github.com/containerd/containerd/v2 \
+SRCREV = "a7e49900aa74c23f294fe050f88f2bbfcdaadd2a"
+SRC_URI = "git://github.com/containerd/containerd;branch=main;protocol=https;destsuffix=git/src/github.com/containerd/containerd/v2 \
            file://0001-Makefile-allow-GO_BUILD_FLAGS-to-be-externally-speci.patch \
            file://0001-build-don-t-use-gcflags-to-define-trimpath.patch \
            file://cni-containerd-net.conflist \
@@ -16,7 +16,7 @@ SRC_URI = "git://github.com/containerd/containerd;branch=release/2.1;protocol=ht
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=1269f40c0d099c21a871163984590d89"
 
-CONTAINERD_VERSION = "v2.1.4"
+CONTAINERD_VERSION = "v2.2.0-beta.1"
 
 # EXTRA_OEMAKE += "GODEBUG=1"
 
@@ -48,8 +48,8 @@ do_compile() {
     # Pass the needed cflags/ldflags so that cgo
     # can find the needed headers files and libraries
     export CGO_ENABLED="1"
-    export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-    export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
+    export CGO_CFLAGS="${CFLAGS}"
+    export CGO_LDFLAGS="${LDFLAGS}"
     export BUILDTAGS="no_btrfs static_build netgo"
     export CFLAGS="${CFLAGS}"
     export LDFLAGS="${LDFLAGS}"
@@ -59,7 +59,10 @@ do_compile() {
     #        ... recipe-sysroot-native/usr/lib/aarch64-poky-linux/go/pkg/tool/linux_amd64/link:
     #        cannot open file : open : no such file or directory
     export GO_BUILD_FLAGS="-trimpath -a -pkgdir dontusecurrentpkgs"
-    export GO111MODULE=off
+    # As of v2.2.0+ the GO11MODULE setting breaks the build (linking errors). It doesn't
+    # seem necessary anymore. Leaving it here for now as a breakcrumb if other errors pop
+    # up
+    # export GO111MODULE=off
 
     cd ${S}
 

@@ -1,0 +1,56 @@
+From 4d00d4f8046972907ef34ac5677d07ae39f3aded Mon Sep 17 00:00:00 2001
+From: Jaeyoon Jung <jaeyoon.jung@lge.com>
+Date: Sun, 30 Nov 2025 11:51:13 +0900
+Subject: [PATCH] build: Check if P_PIDFD is defined
+
+It is defined in enum 'idtype_t' in some environment in which causes an
+error like:
+../git/src/lxc/process_utils.h:144:17: error: expected identifier before numeric constant
+  144 | #define P_PIDFD 3
+      |                 ^
+
+Signed-off-by: Jaeyoon Jung <jaeyoon.jung@lge.com>
+Upstream-Status: Submitted [https://github.com/lxc/lxc/pull/4614]
+---
+ meson.build             | 11 +++++++++++
+ src/lxc/process_utils.h |  2 +-
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index ec7524c2..4b3a8f07 100644
+--- a/meson.build
++++ b/meson.build
+@@ -521,6 +521,17 @@ foreach ccattr: [
+     srcconf.set10('HAVE_COMPILER_ATTR_' + ccattr.underscorify().to_upper(), cc.has_function_attribute(ccattr))
+ endforeach
+ 
++## P_PIDFD
++test_code = '''
++#include <sys/wait.h>
++void func() { siginfo_t s; int r = waitid(P_PIDFD, 0, &s, 0); }
++'''
++if cc.compiles(test_code, name: 'waitid(P_PIDFD, ...)')
++    srcconf.set('HAVE_P_PIDFD', 1)
++  else
++    srcconf.set('HAVE_P_PIDFD', 0)
++endif
++
+ ## Headers.
+ foreach ident: [
+     ['bpf',               '''#include <sys/syscall.h>
+diff --git a/src/lxc/process_utils.h b/src/lxc/process_utils.h
+index effff9bd..f4f53a23 100644
+--- a/src/lxc/process_utils.h
++++ b/src/lxc/process_utils.h
+@@ -139,7 +139,7 @@
+ #endif
+ 
+ /* waitid */
+-#if !HAVE_SYS_PIDFD_H
++#if !HAVE_P_PIDFD
+ #ifndef P_PIDFD
+ #define P_PIDFD 3
+ #endif
+-- 
+2.47.2
+

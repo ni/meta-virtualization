@@ -3,10 +3,10 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 PRIORITY = "optional"
 
-SRCREV_crun = "ca8e5c74c13dbd5b1125d0357a9081d283a50971"
-SRCREV_libocispec = "68397329bc51a66c56938fc4111fac751d6fd3b0"
-SRCREV_ispec = "64294bd7a2bf2537e1a6a34d687caae70300b0c4"
-SRCREV_rspec = "82cca47c22f5e87880421381fe1f8e0ef541ab64"
+SRCREV_crun = "64611d7ac938b8397e8a00a0e69987583fadec7d"
+SRCREV_libocispec = "552ccbbad3aaff8e07e8fbad210ec3b4c9c95a66"
+SRCREV_ispec = "6519a62d628ec31b5da156de745b516d8850c8e3"
+SRCREV_rspec = "5610abdb9fac3b48b2c0ba6216d77320cbbbfb6f"
 SRCREV_yajl = "f344d21280c3e4094919fd318bc5ce75da91fc06"
 
 SRCREV_FORMAT = "crun_rspec"
@@ -15,9 +15,11 @@ SRC_URI = "git://github.com/containers/crun.git;branch=main;name=crun;protocol=h
            git://github.com/opencontainers/runtime-spec.git;branch=main;name=rspec;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/libocispec/runtime-spec;protocol=https \
            git://github.com/opencontainers/image-spec.git;branch=main;name=ispec;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/libocispec/image-spec;protocol=https \
            git://github.com/containers/yajl.git;branch=main;name=yajl;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/libocispec/yajl;protocol=https \
+           file://0001-libocispec-correctly-parse-JSON-schema-references.patch;patchdir=libocispec \
+           file://0002-libocispec-fix-array-items-parsing.patch;patchdir=libocispec \
           "
 
-PV = "v1.23.1+git${SRCREV_crun}"
+PV = "v1.24.0+git"
 
 inherit autotools-brokensep pkgconfig
 
@@ -54,3 +56,10 @@ do_install() {
         ln -sr "${D}/${bindir}/crun" "${D}${bindir}/runc"
     fi
 }
+
+# When crun provides /usr/bin/runc symlink, it conflicts with the runc package
+RCONFLICTS:${PN} = "${@'runc' if d.getVar('CRUN_AS_RUNC') else ''}"
+
+REQUIRED_DISTRO_FEATURES:class-native ?= ""
+DEPENDS:class-native += "yajl libcap go-md2man m4 libseccomp"
+BBCLASSEXTEND = "native"

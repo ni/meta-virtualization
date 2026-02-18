@@ -16,9 +16,9 @@ DEPENDS = " \
     gettext-native \
 "
 
-SRCREV = "41224eb949be6fa380c11d8ef66c099462d2507f"
+SRCREV = "ec1b7c989f172bb46f6c4c629c9ce29e07d97ca5"
 SRC_URI = " \
-    git://github.com/containers/libpod.git;branch=v5.6;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+    git://github.com/containers/libpod.git;branch=v5.7;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
     ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'file://50-podman-rootless.conf', '', d)} \
 "
 
@@ -27,7 +27,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3d9b931fa23ab1cacd0087f9e2ee12
 
 GO_IMPORT = "import"
 
-PV = "v5.6.0"
+PV = "v5.7.1"
 
 CVE_STATUS[CVE-2022-2989] = "fixed-version: fixed since v4.3.0"
 CVE_STATUS[CVE-2023-0778] = "fixed-version: fixed since v4.5.0"
@@ -48,7 +48,7 @@ export LDFLAGS = ""
 TOOLCHAIN = "gcc"
 
 # podmans Makefile expects BUILDFLAGS to be set but go.bbclass defines them in GOBUILDFLAGS
-export BUILDFLAGS = "${GOBUILDFLAGS}"
+export BUILDFLAGS = "${GOBUILDFLAGS} -buildvcs=false"
 
 inherit go goarch
 inherit container-host
@@ -88,8 +88,8 @@ do_compile() {
 	# can find the needed headers files and libraries
 	export GOARCH=${TARGET_GOARCH}
 	export CGO_ENABLED="1"
-	export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-	export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
+	export CGO_CFLAGS="${CFLAGS}"
+	export CGO_LDFLAGS="${LDFLAGS}"
 
 	# podman now builds go-md2man and requires the host/build details
 	export NATIVE_GOOS=${BUILD_GOOS}
@@ -143,7 +143,7 @@ VIRTUAL-RUNTIME_base-utils-nsenter ?= "util-linux-nsenter"
 COMPATIBLE_HOST = "^(?!mips).*"
 
 RDEPENDS:${PN} += "\
-	catatonit conmon ${VIRTUAL-RUNTIME_container_runtime} iptables libdevmapper \
+	catatonit conmon ${VIRTUAL-RUNTIME_container_runtime} gpgme iptables libdevmapper \
 	${VIRTUAL-RUNTIME_container_dns} ${VIRTUAL-RUNTIME_container_networking} ${VIRTUAL-RUNTIME_base-utils-nsenter} \
 "
 RRECOMMENDS:${PN} += "slirp4netns \

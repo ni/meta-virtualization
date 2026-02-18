@@ -8,6 +8,9 @@ alphabetical order as well.
 00-README
         - info on the goals of meta-virtualization and this docs subdir
 
+container-bundling.md
+	- container bundling, cross-install, and vdkr/vpdmn documentation.
+
 openvswitch.txt
 	- example on how to setup openvswitch with qemu/kvm.
 

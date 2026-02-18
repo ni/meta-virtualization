@@ -9,18 +9,26 @@ DEPENDS = " \
     ${@bb.utils.filter('DISTRO_FEATURES', 'systemd', d)} \
 "
 
-# Specify the first two important SRCREVs as the format
-SRCREV_FORMAT = "nerdcli_cgroups"
-SRCREV_nerdcli = "497c7cf74d09bf1ddf2678382360ca61e6faebac"
+SRCREV_FORMAT = "nerdcli"
+SRCREV_nerdcli = "5604f9077214d1e7ef84e1699d794387d281195a"
 
 SRC_URI = "git://github.com/containerd/nerdctl.git;name=nerdcli;branch=main;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX}"
 
-include src_uri.inc
+# GO_MOD_FETCH_MODE: "vcs" (all git://) or "hybrid" (gomod:// + git://)
+GO_MOD_FETCH_MODE ?= "hybrid"
 
-# patches and config
+# VCS mode: all modules via git://
+include ${@ "go-mod-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+include ${@ "go-mod-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+
+# Hybrid mode: gomod:// for most, git:// for selected
+include ${@ "go-mod-hybrid-gomod.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+
+# patches
 SRC_URI += " \
             file://0001-Makefile-allow-external-specification-of-build-setti.patch \
-            file://modules.txt \
            "
 
 LICENSE = "Apache-2.0"
@@ -28,12 +36,20 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd
 
 GO_IMPORT = "import"
 
-PV = "v2.0.3"
+PV = "v2.2.0"
 
 NERDCTL_PKG = "github.com/containerd/nerdctl"
 
+# go-mod-discovery configuration
+GO_MOD_DISCOVERY_BUILD_TARGET = "./cmd/nerdctl"
+GO_MOD_DISCOVERY_GIT_REPO = "https://github.com/containerd/nerdctl.git"
+GO_MOD_DISCOVERY_GIT_REF = "${SRCREV_nerdcli}"
+
 inherit go goarch
 inherit systemd pkgconfig
+inherit go-mod-discovery
+
+BB_GIT_SHALLOW = "1"
 
 do_configure[noexec] = "1"
 
@@ -45,32 +61,24 @@ EXTRA_OEMAKE = " \
 
 PACKAGECONFIG ?= ""
 
-# sets the "sites" variable.
-include relocation.inc
-
-PIEFLAG = "${@bb.utils.contains('GOBUILDFLAGS', '-buildmode=pie', '-buildmode=pie', '', d)}"
-
 do_compile() {
+        export GOPATH="${S}/src/import/.gopath:${S}/src/import/vendor:${STAGING_DIR_TARGET}/${prefix}/local/go"
+        export GOMODCACHE="${S}/pkg/mod"
+        export CGO_ENABLED="1"
+        export GOSUMDB="off"
+        export GOTOOLCHAIN="local"
+        export GOPROXY="off"
 
-    	cd ${S}/src/import
+        cd ${S}/src/import
 
-	export GOPATH="$GOPATH:${S}/src/import/.gopath"
+        # Pass the needed cflags/ldflags so that cgo
+        # can find the needed headers files and libraries
+        export GOARCH=${TARGET_GOARCH}
+        export CGO_CFLAGS="${CFLAGS}"
+        export CGO_LDFLAGS="${LDFLAGS}"
 
-	# Pass the needed cflags/ldflags so that cgo
-	# can find the needed headers files and libraries
-	export GOARCH=${TARGET_GOARCH}
-	export CGO_ENABLED="1"
-	export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-	export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-
-	export GOFLAGS="-mod=vendor -trimpath ${PIEFLAG}"
-
-	# our copied .go files are to be used for the build
-	ln -sf vendor.copy vendor
-	# inform go that we know what we are doing
-	cp ${UNPACKDIR}/modules.txt vendor/
-
-	oe_runmake GO=${GO} BUILDTAGS="${BUILDTAGS}" binaries
+        # -trimpath removes build paths from the binary (required for reproducible builds)
+        oe_runmake GO=${GO} BUILDTAGS="${BUILDTAGS}" GO_BUILD_FLAGS="-trimpath -buildmode=pie" binaries
 }
 
 do_install() {

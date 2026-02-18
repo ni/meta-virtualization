@@ -39,6 +39,9 @@ that may also be enabled:
  - systemd: enable systemd services and unit files (for recipes for support)
  - sysvinit: enable sysvinit scripts (for recipes with support)
  - seccomp: enable seccomp support for packages that have the capability.
+ - vcontainer: enables vdkr/vpdmn virtual container runtime support, including
+   kernel config fragments (9p, squashfs, overlayfs) and busybox utilities
+   (base64, hexdump) required for container cross-install during image builds.
 
 Dependencies
 ------------

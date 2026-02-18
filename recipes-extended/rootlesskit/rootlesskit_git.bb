@@ -5,36 +5,49 @@ The purpose of RootlessKit is to run Docker and Kubernetes as an unprivileged us
 so as to protect the real root on the host from potential container-breakout attacks. \
 "
 
-# generated with:
-# scripts/oe-go-mod-autogen.py --repo  https://github.com/rootless-containers/rootlesskit  --rev c784875ba4ba4c5aaa256f98675fd543b087c900
-
 DEPENDS = " \
     go-md2man \
-    rsync-native \
 "
-# Specify the first two important SRCREVs as the format
+
+SRCREV_rootless = "8059d35092db167ec53cae95fb6aa37fc577060c"
 SRCREV_FORMAT = "rootless"
-SRCREV_rootless = "530859a92629689c0c17c96d9ab145f4d04b5b5a"
 
-SRC_URI = "git://github.com/rootless-containers/rootlesskit;name=rootless;branch=master;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX}"
+SRC_URI = "git://github.com/rootless-containers/rootlesskit;name=rootless;branch=master;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+           file://0001-rootlesskit-add-GOFLAGS-to-Makefile.patch \
+          "
 
-include src_uri.inc
 
-# patches and config
-SRC_URI += "file://modules.txt \
-           "
+# GO_MOD_FETCH_MODE: "vcs" (all git://) or "hybrid" (gomod:// + git://)
+GO_MOD_FETCH_MODE ?= "hybrid"
+
+# VCS mode: all modules via git://
+include ${@ "go-mod-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+include ${@ "go-mod-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+
+# Hybrid mode: gomod:// for most, git:// for selected
+include ${@ "go-mod-hybrid-gomod.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
 
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd57"
 
 GO_IMPORT = "import"
 
-PV = "v2.3.4+git"
+PV = "v3.0.0-alpha.1+git"
 
 ROOTLESS_PKG = "github.com/rootless-containers/rootlesskit"
 
+# go-mod-discovery configuration
+GO_MOD_DISCOVERY_BUILD_TARGET = "./cmd/..."
+GO_MOD_DISCOVERY_GIT_REPO = "https://github.com/rootless-containers/rootlesskit.git"
+GO_MOD_DISCOVERY_GIT_REF = "${SRCREV_rootless}"
+
 inherit go goarch
 inherit systemd pkgconfig
+inherit go-mod-discovery
+
+BB_GIT_SHALLOW = "1"
 
 do_configure[noexec] = "1"
 
@@ -46,27 +59,19 @@ EXTRA_OEMAKE = " \
 
 PACKAGECONFIG ?= ""
 
-include relocation.inc
-
 do_compile() {
-
 	cd ${S}/src/import
 
-	export GOPATH="$GOPATH:${S}/src/import/.gopath"
+	# GOMODCACHE, GOPROXY, GOSUMDB, GOTOOLCHAIN are set by go-mod-vcs.bbclass
+	export GOPATH="${S}/src/import/.gopath:${STAGING_DIR_TARGET}/${prefix}/local/go"
+	export CGO_ENABLED="1"
 
 	# Pass the needed cflags/ldflags so that cgo
 	# can find the needed headers files and libraries
 	export GOARCH=${TARGET_GOARCH}
-	export CGO_ENABLED="1"
+	export GOFLAGS="-trimpath"
 	export CGO_CFLAGS="${CFLAGS} --sysroot=${STAGING_DIR_TARGET}"
 	export CGO_LDFLAGS="${LDFLAGS} --sysroot=${STAGING_DIR_TARGET}"
-
-	export GOFLAGS="-mod=vendor -trimpath ${PIEFLAG}"
-
-	# our copied .go files are to be used for the build
-	ln -sf vendor.copy vendor
-	# inform go that we know what we are doing
-	cp ${UNPACKDIR}/modules.txt vendor/
 
 	oe_runmake GO=${GO} BUILDTAGS="${BUILDTAGS}" all
 }

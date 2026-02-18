@@ -4,7 +4,7 @@ HOMEPAGE = "https://k3s.io/"
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://${S}/src/import/LICENSE;md5=2ee41112a44fe7014dce33e26468ba93"
 
-SRC_URI = "git://github.com/rancher/k3s.git;branch=release-1.32;name=k3s;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+SRC_URI = "git://github.com/rancher/k3s.git;branch=release-1.34;name=k3s;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
            file://k3s.service \
            file://k3s-agent.service \
            file://k3s-agent \
@@ -12,23 +12,45 @@ SRC_URI = "git://github.com/rancher/k3s.git;branch=release-1.32;name=k3s;protoco
            file://cni-containerd-net.conf \
            file://0001-Finding-host-local-in-usr-libexec.patch;patchdir=src/import \
            file://k3s-killall.sh \
-           file://modules.txt \
           "
 
 SRC_URI[k3s.md5sum] = "363d3a08dc0b72ba6e6577964f6e94a5"
-SRCREV_k3s = "39f4cbb3367544477e9e678626c0add76e731624"
+SRCREV_k3s = "54f28d21a6208b1f8f9c33e14cf1fc65c2030107"
 
 SRCREV_FORMAT = "k3s_fuse"
-PV = "v1.32.0-rc2+k3s1+git${SRCREV_k3s}"
-
-include src_uri.inc
+PV = "v1.34.1+k3s1+git"
 
 CNI_NETWORKING_FILES ?= "${UNPACKDIR}/cni-containerd-net.conf"
+
+# Build tags - used by both do_compile and do_discover_modules
+TAGS = "static_build netcgo osusergo providerless"
+
+# go-mod-discovery configuration
+# Uses defaults: SRCDIR=${S}/src/import, BUILD_TAGS=${TAGS}, GOPATH=${S}/src/import/.gopath:...
+GO_MOD_DISCOVERY_BUILD_TARGET = "./cmd/server/main.go"
+GO_MOD_DISCOVERY_LDFLAGS = "-X github.com/k3s-io/k3s/pkg/version.Version=${PV} -w -s"
+GO_MOD_DISCOVERY_GIT_REPO = "https://github.com/rancher/k3s.git"
+GO_MOD_DISCOVERY_GIT_REF = "${SRCREV_k3s}"
+
+# GO_MOD_FETCH_MODE: "vcs" (all git://) or "hybrid" (gomod:// + git://)
+GO_MOD_FETCH_MODE ?= "hybrid"
+
+# VCS mode: all modules via git://
+include ${@ "go-mod-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+include ${@ "go-mod-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "vcs" else ""}
+
+# Hybrid mode: gomod:// for most, git:// for selected
+include ${@ "go-mod-hybrid-gomod.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-git.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
+include ${@ "go-mod-hybrid-cache.inc" if d.getVar("GO_MOD_FETCH_MODE") == "hybrid" else ""}
 
 inherit go
 inherit goarch
 inherit systemd
 inherit cni_networking
+inherit go-mod-discovery
+
+BB_GIT_SHALLOW = "1"
 
 COMPATIBLE_HOST = "^(?!mips).*"
 
@@ -46,38 +68,29 @@ REQUIRED_DISTRO_FEATURES ?= "seccomp"
 
 DEPENDS += "rsync-native"
 
-include relocation.inc
+# Go's PIE builds pull in cgo objects that still require text relocations.
+# Explicitly allow them at link time to avoid ld --fatal-warnings aborting the build.
+GO_EXTRA_LDFLAGS:append = " -Wl,-z,notext"
 
 do_compile() {
         export GOPATH="${S}/src/import/.gopath:${S}/src/import/vendor:${STAGING_DIR_TARGET}/${prefix}/local/go"
+        export GOMODCACHE="${S}/pkg/mod"
         export CGO_ENABLED="1"
-        export GOFLAGS="-mod=vendor"
+        export GOSUMDB="off"
+        export GOTOOLCHAIN="local"
+        export GOPROXY="off"
 
-        # TAGS="static_build ctrd no_btrfs netcgo osusergo providerless"
-	TAGS="static_build netcgo osusergo providerless"
+        # Remove go.sum files from git-fetched dependencies to prevent checksum conflicts
+        # Our git-built modules have different checksums than proxy.golang.org tarballs
+        find ${WORKDIR}/sources/vcs_cache -name "go.sum" -delete || true
 
         cd ${S}/src/import
 
-	if ! [ -e vendor/.noclobber ]; then
-            ln -sf vendor.copy vendor
-	else
-	    echo "[INFO]: no clobber on vendor"
-	fi
-
-        # these are bad symlinks, go validates them and breaks the build if they are present
-        rm -f vendor/go.etcd.io/etcd/client/v*/example_*
-        rm -f vendor/go.etcd.io/etcd/client/v*/concurrency/example_*.go
-
-	# Note: if no_brtfs is used in the tags, we'll violate build
-	#       constraints, and the following files need to have them
-	#       removed for the build to continue:
-	#
-	#         vendor/github.com/containerd/containerd/snapshots/btrfs/plugin/*.go
-
-        cp ${UNPACKDIR}/modules.txt vendor/
+        # go.mod and go.sum are synchronized by do_sync_go_files task
+        # No manual fixes needed - discovery and recipe generation handle version matching
 
         VERSION_GOLANG="$(go version | cut -d" " -f3)"
-        ${GO} build -trimpath -tags "$TAGS" -ldflags "-X github.com/k3s-io/k3s/pkg/version.UpstreamGolang=$VERSION_GOLANG  ${GO_BUILD_LDFLAGS} -w -s" -o ./dist/artifacts/k3s ./cmd/server/main.go
+        ${GO} build -trimpath -tags "${TAGS}" -ldflags "-X github.com/k3s-io/k3s/pkg/version.UpstreamGolang=$VERSION_GOLANG  ${GO_BUILD_LDFLAGS} -w -s" -o ./dist/artifacts/k3s ./cmd/server/main.go
 
         # Use UPX if it is enabled (and thus exists) to compress binary
         if command -v upx > /dev/null 2>&1; then

@@ -13,16 +13,16 @@ Signed-off-by: Hongxu Jia <hongxu.jia@windriver.com>
  src/import/Makefile | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
-Index: git/src/import/Makefile
+Index: nerdctl-v2.2.0/src/import/Makefile
 ===================================================================
---- git.orig/src/import/Makefile
-+++ git/src/import/Makefile
-@@ -54,7 +54,7 @@
+--- nerdctl-v2.2.0.orig/src/import/Makefile
++++ nerdctl-v2.2.0/src/import/Makefile
+@@ -57,7 +57,7 @@
  	VERBOSE_FLAG_LONG := --verbose
  endif
  
--export GO_BUILD=CGO_ENABLED=0 GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
-+export GO_BUILD=GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
+-export GO_BUILD=CGO_ENABLED=0 GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build $(GO_TAGS) -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
++export GO_BUILD=GOOS=$(GOOS) $(GO) -C $(MAKEFILE_DIR) build $(GO_TAGS) -ldflags "$(GO_BUILD_LDFLAGS) $(VERBOSE_FLAG) -X $(PACKAGE)/pkg/version.Version=$(VERSION) -X $(PACKAGE)/pkg/version.Revision=$(REVISION)"
  
  ifndef NO_COLOR
      NC := \033[0m
