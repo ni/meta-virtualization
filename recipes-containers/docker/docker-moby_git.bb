@@ -63,6 +63,8 @@ SRC_URI = "\
         file://CVE-2024-36621.patch;patchdir=src/import \
         file://CVE-2024-36623.patch;patchdir=src/import \
         file://CVE-2024-29018.patch;patchdir=src/import \
+        file://CVE-2024-41110_1.patch;patchdir=src/import \
+        file://CVE-2024-41110_2.patch;patchdir=src/import \
 	"
 
 DOCKER_COMMIT = "${SRCREV_moby}"
