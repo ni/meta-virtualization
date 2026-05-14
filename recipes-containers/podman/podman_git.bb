@@ -17,7 +17,7 @@ DEPENDS = " \
     gettext-native \
 "
 
-SRCREV = "bb81e85a430fa95d23a15b77c717fd68bf06ebf2"
+SRCREV = "d08315df35cb6e95f65bf3935f529295c6e54742"
 SRC_URI = " \
     git://github.com/containers/libpod.git;branch=v5.0;protocol=https \
     ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'file://50-podman-rootless.conf', '', d)} \
@@ -33,7 +33,7 @@ GO_IMPORT = "import"
 
 S = "${WORKDIR}/git"
 
-PV = "5.0.1+git"
+PV = "5.0.3+git"
 
 CVE_STATUS[CVE-2022-2989] = "fixed-version: fixed since v4.3.0"
 CVE_STATUS[CVE-2023-0778] = "fixed-version: fixed since v4.5.0"

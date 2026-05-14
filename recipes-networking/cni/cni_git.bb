@@ -96,3 +96,6 @@ INSANE_SKIP:${PN} += "ldflags already-stripped"
 deltask compile_ptest_base
 
 RDEPENDS:${PN} += " ca-certificates"
+
+# Add CVE_PRODUCT to match the NVD CPE product names
+CVE_PRODUCT = "linuxfoundation:container_network_interface linuxfoundation:cni_network_plugins"
