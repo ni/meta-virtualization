@@ -226,6 +226,14 @@ def pytest_addoption(parser):
         default=24.0,
         help="Max rootfs age in hours before warning (default: 24)",
     )
+    # K3s options
+    parser.addoption(
+        "--k3s-timeout",
+        action="store",
+        type=int,
+        default=300,
+        help="Timeout in seconds for k3s readiness (default: 300)",
+    )
     # Container registry options
     parser.addoption(
         "--registry-url",
@@ -396,20 +404,35 @@ class VdkrRunner:
         self._needs_arch_flag = binary.name == "vdkr"
 
     def run(self, *args, timeout=120, check=True, capture_output=True):
-        """Run a vdkr command with test state directory."""
+        """Run a vdkr command with test state directory.
+
+        Uses Popen with start_new_session and file-based output to
+        prevent daemon background processes from inheriting pipe FDs,
+        which causes subprocess.run(capture_output=True) to hang in
+        CI/test harness environments.
+        """
         cmd = [str(self.binary)]
         if self._needs_arch_flag:
             cmd.extend(["--arch", self.arch])
         cmd.extend(["--state-dir", str(self.state_dir)])
         cmd.extend(list(args))
-        result = subprocess.run(
-            cmd,
-            env=self.env,
-            timeout=timeout,
-            check=False,  # Don't raise immediately, check manually for better error messages
-            capture_output=capture_output,
-            text=True,
-        )
+        with tempfile.TemporaryFile(mode='w+') as out:
+            proc = subprocess.Popen(
+                cmd, env=self.env,
+                stdin=subprocess.DEVNULL,
+                stdout=out, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+            out.seek(0)
+            output = out.read()
+        result = subprocess.CompletedProcess(
+            cmd, proc.returncode, stdout=output, stderr="")
         if check and result.returncode != 0:
             error_msg = f"Command failed: {' '.join(cmd)}\n"
             error_msg += f"Exit code: {result.returncode}\n"
@@ -417,7 +440,6 @@ class VdkrRunner:
                 error_msg += f"stdout: {result.stdout}\n"
             if result.stderr:
                 error_msg += f"stderr: {result.stderr}\n"
-            # Print error so it's visible in test output
             print(error_msg)
             raise AssertionError(error_msg)
         return result
@@ -436,7 +458,35 @@ class VdkrRunner:
         if port_forwards:
             for pf in port_forwards:
                 args.extend(["-p", pf])
-        return self.run(*args, timeout=timeout)
+        # memres start spawns background processes (QEMU VM, idle watchdog)
+        # that can inherit pipe FDs from subprocess.run(capture_output=True),
+        # causing communicate() to hang indefinitely. Use Popen with
+        # file-based output, DEVNULL stdin, and start_new_session to fully
+        # isolate the daemon process tree from the test harness.
+        cmd = [str(self.binary)]
+        if self._needs_arch_flag:
+            cmd.extend(["--arch", self.arch])
+        cmd.extend(["--state-dir", str(self.state_dir)])
+        cmd.extend(args)
+        import tempfile
+        with tempfile.TemporaryFile(mode='w+') as out:
+            proc = subprocess.Popen(
+                cmd, env=self.env,
+                stdin=subprocess.DEVNULL,
+                stdout=out, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+            out.seek(0)
+            output = out.read()
+        result = subprocess.CompletedProcess(
+            cmd, proc.returncode, stdout=output, stderr="")
+        return result
 
     def memres_stop(self, timeout=30):
         """Stop memory resident mode."""
@@ -586,6 +636,15 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "secure: marks tests that require secure registry mode (TLS/auth)"
     )
+    config.addinivalue_line(
+        "markers", "boot: marks tests that boot a QEMU image (requires built image)"
+    )
+    config.addinivalue_line(
+        "markers", "k3s: marks k3s runtime tests"
+    )
+    config.addinivalue_line(
+        "markers", "multinode: marks multi-node tests (requires two QEMU VMs)"
+    )
 
 
 @pytest.fixture
@@ -688,7 +747,35 @@ class VpdmnRunner:
         if port_forwards:
             for pf in port_forwards:
                 args.extend(["-p", pf])
-        return self.run(*args, timeout=timeout)
+        # memres start spawns background processes (QEMU VM, idle watchdog)
+        # that can inherit pipe FDs from subprocess.run(capture_output=True),
+        # causing communicate() to hang indefinitely. Use Popen with
+        # file-based output, DEVNULL stdin, and start_new_session to fully
+        # isolate the daemon process tree from the test harness.
+        cmd = [str(self.binary)]
+        if self._needs_arch_flag:
+            cmd.extend(["--arch", self.arch])
+        cmd.extend(["--state-dir", str(self.state_dir)])
+        cmd.extend(args)
+        import tempfile
+        with tempfile.TemporaryFile(mode='w+') as out:
+            proc = subprocess.Popen(
+                cmd, env=self.env,
+                stdin=subprocess.DEVNULL,
+                stdout=out, stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+            try:
+                proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+                raise
+            out.seek(0)
+            output = out.read()
+        result = subprocess.CompletedProcess(
+            cmd, proc.returncode, stdout=output, stderr="")
+        return result
 
     def memres_stop(self, timeout=30):
         """Stop memory resident mode."""

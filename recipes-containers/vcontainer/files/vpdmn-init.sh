@@ -20,6 +20,12 @@
 #   podman_output=<type>   Output type: text, tar, storage (default: text)
 #   podman_state=<type>    State type: none, disk (default: none)
 #   podman_network=1       Enable networking (configure eth0, DNS)
+#   podman_auth=1          A pre-built registry auth file (docker config.json
+#                          schema, "auths" block) is available on a dedicated
+#                          read-only 9p share tagged "vpdmn_auth" (mounted at
+#                          /mnt/auth). Installed as /run/containers/0/auth.json
+#                          (the rootful podman default), and exported via
+#                          $REGISTRY_AUTH_FILE.
 #
 # Version: 1.1.0
 #
@@ -97,6 +103,57 @@ verify_podman() {
     fi
 }
 
+# Install a user-supplied registry auth file from the dedicated read-only
+# auth 9p share (mounted at /mnt/auth by mount_auth_share). Podman accepts
+# the same "auths" JSON schema as docker config.json, so we can copy directly.
+#
+# Canonical rootful path is /run/containers/0/auth.json; we also export
+# $REGISTRY_AUTH_FILE so it works regardless of podman's search order.
+#
+# Security posture matches vdkr-init.sh install_auth_config:
+#   * Source is a separate read-only 9p tag ("vpdmn_auth") so it cannot leak
+#     into /mnt/share outputs.
+#   * Target has mode 0600; containing dir has mode 0700.
+#   * /mnt/auth is unmounted immediately after copy so user workloads in the
+#     VM have no open reference to the host-side staging directory.
+install_auth_config() {
+    if [ "$RUNTIME_AUTH" != "1" ]; then
+        return 0
+    fi
+
+    if ! mount_auth_share; then
+        log "WARNING: podman_auth=1 was set but the auth 9p share did not mount"
+        return 1
+    fi
+
+    local src="$AUTH_SHARE_MOUNT/config.json"
+    if [ ! -f "$src" ]; then
+        log "WARNING: expected $src on auth share but file is missing"
+        unmount_auth_share
+        return 1
+    fi
+
+    # Rootful podman's default auth path
+    local auth_dir="/run/containers/0"
+    local auth_file="$auth_dir/auth.json"
+
+    mkdir -p "$auth_dir"
+    chmod 700 "$auth_dir"
+
+    if cp "$src" "$auth_file" 2>/dev/null; then
+        chmod 600 "$auth_file"
+        export REGISTRY_AUTH_FILE="$auth_file"
+        log "Installed registry auth config at $auth_file"
+    else
+        log "ERROR: failed to copy auth config to $auth_file"
+        unmount_auth_share
+        return 1
+    fi
+
+    unmount_auth_share
+    return 0
+}
+
 # Podman is daemonless - nothing to stop
 stop_runtime_daemons() {
     :
@@ -164,13 +221,13 @@ setup_cgroups
 # Parse kernel command line
 parse_cmdline
 
-# Mount virtio-9p share if available (for fast storage output in batch-import mode)
+# Mount 9p share if available (for fast storage output in batch-import mode)
 if [ "$RUNTIME_9P" = "1" ]; then
     mkdir -p /mnt/share
-    if mount -t 9p -o trans=virtio,version=9p2000.L,cache=none ${VCONTAINER_SHARE_NAME} /mnt/share 2>/dev/null; then
-        log "Mounted virtio-9p share at /mnt/share (fast I/O enabled)"
+    if mount -t 9p -o trans=${NINE_P_TRANSPORT},version=9p2000.L,cache=none ${VCONTAINER_SHARE_NAME} /mnt/share 2>/dev/null; then
+        log "Mounted 9p share at /mnt/share (transport: ${NINE_P_TRANSPORT})"
     else
-        log "WARNING: Could not mount virtio-9p share, falling back to console output"
+        log "WARNING: Could not mount 9p share, falling back to console output"
         RUNTIME_9P="0"
     fi
 fi
@@ -189,6 +246,10 @@ configure_networking
 
 # Verify podman is available (no daemon to start)
 verify_podman
+
+# Install user-supplied auth config from the dedicated auth 9p share, if any.
+# Done before command execution so pulls/logins have credentials available.
+install_auth_config
 
 # Handle daemon mode or single command execution
 if [ "$RUNTIME_DAEMON" = "1" ]; then

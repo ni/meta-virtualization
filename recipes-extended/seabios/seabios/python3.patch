@@ -1,9 +1,9 @@
 Upstream-Status: Inappropriate [embedded specific]
 
-diff --git a/Makefile b/Makefile
-index 516cb38..7f6acaa 100644
---- a/Makefile
-+++ b/Makefile
+Index: seabios-1.17.0/Makefile
+===================================================================
+--- seabios-1.17.0.orig/Makefile
++++ seabios-1.17.0/Makefile
 @@ -22,7 +22,7 @@ LD=$(CROSS_PREFIX)ld
  OBJCOPY=$(CROSS_PREFIX)objcopy
  OBJDUMP=$(CROSS_PREFIX)objdump

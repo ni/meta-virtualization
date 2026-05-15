@@ -29,6 +29,8 @@ DEPENDS = "coreutils-native socat-native"
 
 SRC_URI = "\
     file://vrunner.sh \
+    file://vrunner-backend-qemu.sh \
+    file://vrunner-backend-xen.sh \
     file://vcontainer-common.sh \
 "
 
@@ -37,6 +39,8 @@ S = "${UNPACKDIR}"
 do_install() {
     install -d ${D}${bindir}
     install -m 0755 ${S}/vrunner.sh ${D}${bindir}/vrunner.sh
+    install -m 0755 ${S}/vrunner-backend-qemu.sh ${D}${bindir}/vrunner-backend-qemu.sh
+    install -m 0755 ${S}/vrunner-backend-xen.sh ${D}${bindir}/vrunner-backend-xen.sh
     install -m 0644 ${S}/vcontainer-common.sh ${D}${bindir}/vcontainer-common.sh
 }
 

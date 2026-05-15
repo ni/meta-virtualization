@@ -9,7 +9,7 @@ DEPENDS = " \
     go-md2man \
 "
 
-SRCREV_rootless = "8059d35092db167ec53cae95fb6aa37fc577060c"
+SRCREV_rootless = "a313ce81e9e48c49a409208b750baea967836b18"
 SRCREV_FORMAT = "rootless"
 
 SRC_URI = "git://github.com/rootless-containers/rootlesskit;name=rootless;branch=master;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \

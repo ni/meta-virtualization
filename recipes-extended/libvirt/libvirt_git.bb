@@ -5,7 +5,7 @@ LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263 \
                     file://COPYING.LESSER;md5=4b54a1fd55a448865a0b32d41598759d"
 SECTION = "console/tools"
 
-DEPENDS = "bridge-utils gnutls libxml2 lvm2 avahi parted curl libpcap util-linux e2fsprogs pm-utils \
+DEPENDS = "bridge-utils gnutls libxml2 lvm2 parted curl libpcap util-linux e2fsprogs pm-utils \
 	   iptables dnsmasq readline libtasn1 libxslt-native acl libdevmapper libtirpc \
            python3-docutils-native \
 	   ${@bb.utils.contains('PACKAGECONFIG', 'polkit', 'shadow-native', '', d)} \
@@ -26,9 +26,9 @@ RDEPENDS:libvirt-libvirtd:append:aarch64 = " dmidecode"
 #connman blocks the 53 port and libvirtd can't start its DNS service
 RCONFLICTS:${PN}_libvirtd = "connman"
 
-SRCREV_libvirt = "2df30bca10b1e1b9e6d275a44f2725321cd55f22"
+SRCREV_libvirt = "9fa6beff05728a32dd11f7ccb7e3c97fca510029"
 
-LIBVIRT_VERSION = "11.10.0"
+LIBVIRT_VERSION = "12.1.0"
 PV = "v${LIBVIRT_VERSION}+git"
 
 SRC_URI = "gitsm://github.com/libvirt/libvirt.git;name=libvirt;protocol=https;branch=master \
@@ -40,7 +40,6 @@ SRC_URI = "gitsm://github.com/libvirt/libvirt.git;name=libvirt;protocol=https;br
            file://libvirt-qemu.conf \
            file://0001-prevent-gendispatch.pl-generating-build-path-in-code.patch \
            file://0001-messon.build-remove-build-path-information-to-avoid-.patch \
-           file://0001-meson.build-clear-abs_top_builddir-to-avoid-QA-warni.patch \
            file://0001-tests-meson-clear-absolute-directory-paths.patch \
            file://0001-qemu_nbdkit.c-use-llu-to-print-time_t.patch \
           "
@@ -131,7 +130,7 @@ SYSTEMD_SERVICE:${PN}-libvirtd = " \
 
 # full config
 PACKAGECONFIG ??= "gnutls qemu openvz vmware vbox esx lxc test remote \
-                   libvirtd netcf udev python fuse firewalld libpcap \
+                   libvirtd udev python fuse firewalld libpcap \
                    ${@bb.utils.contains('DISTRO_FEATURES', 'selinux', 'selinux audit libcap-ng', '', d)} \
                    ${@bb.utils.contains('DISTRO_FEATURES', 'xen', 'libxl', '', d)} \
                    ${@bb.utils.contains('DISTRO_FEATURES', 'polkit', 'polkit', '', d)} \
@@ -178,6 +177,13 @@ PACKAGECONFIG[firewalld] = "-Dfirewalld=enabled, -Dfirewalld=disabled,"
 PACKAGECONFIG[libpcap] = "-Dlibpcap=enabled, -Dlibpcap=disabled,libpcap,libpcap"
 PACKAGECONFIG[numad] = "-Dnumad=enabled, -Dnumad=disabled,"
 PACKAGECONFIG[nftables] = ""
+
+CVE_STATUS[CVE-2014-8135] = "fixed-version: Fixed in 1.2.11, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2014-8136] = "fixed-version: Fixed in 1.2.11, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2015-5313] = "fixed-version: Fixed in 1.3.1, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2018-5748] = "fixed-version: Fixed in 4.0.0, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2018-6764] = "fixed-version: Fixed in 4.1.0, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2023-3750] = "fixed-version: Fixed in 9.6.0, NVD tracks this as version-less vulnerability"
 
 # Enable the Python tool support
 require libvirt-python.inc
@@ -226,13 +232,6 @@ do_install:append() {
                 mv ${D}${prefix}/lib/systemd/system/* ${D}${systemd_system_unitdir}
                 rmdir ${D}${prefix}/lib/systemd/system ${D}${prefix}/lib/systemd
             fi
-
-	    # We can't use 'notify' when we don't support 'sd_notify' dbus capabilities.
-	    # Change default LIBVIRTD_ARGS to start libvirtd in the right mode.
-	    sed -i -e 's/Type=notify/Type=forking/' \
-	           -e '/Type=forking/a PIDFile=/run/libvirtd.pid' \
-	           -e 's/\(Environment=LIBVIRTD_ARGS="--timeout 120"\)/#\1\nEnvironment=LIBVIRTD_ARGS="--listen --daemon"/' \
-		   ${D}/${systemd_system_unitdir}/libvirtd.service
 	fi
 
 	# The /run/libvirt directories created by the Makefile are 

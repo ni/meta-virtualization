@@ -1,6 +1,9 @@
 HOMEPAGE = "https://github.com/lf-edge/runx"
-SUMMARY = "console for runx"
-DESCRIPTION = "Xen Runtime for OCI"
+SUMMARY = "console for runx (DEPRECATED - use vxn instead)"
+DESCRIPTION = "Xen Runtime for OCI. \
+    DEPRECATED: go-build is the serial FD handler companion to runx, \
+    which is unmaintained. Use 'vxn' instead, which handles console \
+    communication via PV consoles without a separate Go binary."
 
 SRCREV_runx = "f24efd33fb18469e9cfe4d1bfe8e2c90ec8c4e93"
 SRCREV_runc = "1e7bb5b773162b57333d57f612fd72e3f8612d94"

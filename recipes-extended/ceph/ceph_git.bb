@@ -1,8 +1,8 @@
 SUMMARY = "User space components of the Ceph file system"
-LICENSE = "LGPL-2.1-only & GPL-2.0-only & Apache-2.0 & MIT"
+LICENSE = "LGPL-2.1-only & GPL-2.0-only & Apache-2.0 & MIT & BSL-1.0 & Zlib"
 LIC_FILES_CHKSUM = "file://COPYING-LGPL2.1;md5=fbc093901857fcd118f065f900982c24 \
                     file://COPYING-GPL2;md5=b234ee4d69f5fce4486a80fdaf4a4263 \
-                    file://COPYING;md5=bf502a28c9b8d6430c8952a583a2c896 \
+                    file://COPYING;md5=2f83d608c026a3156e4c186721954da2 \
 "
 inherit cmake pkgconfig python3native python3-dir systemd useradd
 # Disable python pybind support for ceph temporary, when corss compiling pybind,
@@ -11,18 +11,18 @@ inherit cmake pkgconfig python3native python3-dir systemd useradd
 SRC_URI = "gitsm://github.com/ceph/ceph.git;protocol=https;branch=main \
            file://0001-fix-host-library-paths-were-used.patch \
            file://ceph.conf \
+           file://0001-cmake-use-FindBoost-instead-of-Boost-cmake-config.patch \
            file://0001-delete-install-layout-deb.patch \
            file://0001-cephadm-build.py-avoid-using-python3-from-sysroot-wh.patch \
-           file://0001-cepth-node-proxy-specify-entrypoint-executable.patch \
            file://0001-rados-setup.py-allow-incompatible-pointer-types.patch \
            file://0001-rgw-setup.py-allow-incompatible-pointer-types.patch \
 	   "
 
-SRCREV = "a53e858fd7cc6fd8c04f37d503ce9ed7080f2da6"
-PV = "20.0.0+git"
+SRCREV = "c1f7de9e4e6e92622aaff0d2173c65f83bb56e2e"
+PV = "20.3.0+git"
 
 DEPENDS = "boost bzip2 curl cryptsetup expat gperf-native \
-           keyutils libaio libibverbs lua lz4 \
+           keyutils libaio lua lz4 \
            nspr nss ninja-native \
            oath openldap openssl \
            python3 python3-native python3-cython-native python3-pyyaml-native \
@@ -71,18 +71,25 @@ EXTRA_OECMAKE += "-DWITH_MANPAGE=OFF \
                  -DWITH_LTTNG=OFF \
                  -DWITH_BABELTRACE=OFF \
                  -DWITH_TESTS=OFF \
+                 -DWITH_CATCH2=OFF \
+                 -DWITH_BREAKPAD=OFF \
                  -DWITH_RADOSGW_SELECT_PARQUET=OFF \
                  -DWITH_RADOSGW_ARROW_FLIGHT=OFF \
                  -DWITH_MGR=OFF \
                  -DWITH_MGR_DASHBOARD_FRONTEND=OFF \
                  -DWITH_SYSTEM_BOOST=ON \
+                 -DBoost_NO_BOOST_CMAKE=ON \
+                 -DBOOST_ROOT=${RECIPE_SYSROOT}/usr \
+                 -DBoost_NO_SYSTEM_PATHS=ON \
+                 -DBoost_INCLUDE_DIR=${RECIPE_SYSROOT}/usr/include \
+                 -DBoost_LIBRARY_DIR=${RECIPE_SYSROOT}/usr/lib \
                  -DWITH_RDMA=OFF \
 		 -DWITH_RBD=OFF \
 		 -DWITH_KRBD=OFF \
                  -DWITH_RADOSGW_AMQP_ENDPOINT=OFF \
                  -DWITH_RADOSGW_KAFKA_ENDPOINT=OFF \
                  -DWITH_REENTRANT_STRSIGNAL=ON \
-		 -DWITH_PYTHON3=3.13 \
+		 -DWITH_PYTHON3=${PYTHON_BASEVERSION} \
 		 -DPYTHON_DESIRED=3 \
 		 -DCMAKE_TOOLCHAIN_FILE:FILEPATH=${WORKDIR}/toolchain.cmake \
 		 -DCEPHADM_BUNDLED_DEPENDENCIES=none \
@@ -91,6 +98,11 @@ EXTRA_OECMAKE += "-DWITH_MANPAGE=OFF \
 # -DWITH_SYSTEM_ROCKSDB=ON
 
 do_configure:prepend () {
+	# CMake 4.x writes an unbounded CMakeConfigureLog.yaml that explodes
+	# with OE's long PATH — pre-create it as a symlink to /dev/null
+	mkdir -p ${B}/CMakeFiles
+	ln -sf /dev/null ${B}/CMakeFiles/CMakeConfigureLog.yaml
+
 	echo "set( CMAKE_SYSROOT \"${RECIPE_SYSROOT}\" )" >> ${WORKDIR}/toolchain.cmake
 	echo "set( CMAKE_DESTDIR \"${D}\" )" >> ${WORKDIR}/toolchain.cmake
 	echo "set( PYTHON_SITEPACKAGES_DIR \"${PYTHON_SITEPACKAGES_DIR}\" )" >> ${WORKDIR}/toolchain.cmake
@@ -192,3 +204,6 @@ INSANE_SKIP:${PN}-dbg += "buildpaths"
 CCACHE_DISABLE = "1"
 
 CVE_PRODUCT = "ceph ceph_storage ceph_storage_mon ceph_storage_osd"
+
+CVE_STATUS[CVE-2017-7519] = "fixed-version: Fixed in 12.1.2, NVD tracks this as version-less vulnerability"
+CVE_STATUS[CVE-2020-1700] = "fixed-version: Fixed in 15.1.1, NVD tracks this as version-less vulnerability"

@@ -2,15 +2,15 @@ DESCRIPTION = "A golang registry for global request variables."
 HOMEPAGE = "https://github.com/go-fsnotify/fsnotify"
 SECTION = "devel/go"
 LICENSE = "BSD-3-Clause"
-LIC_FILES_CHKSUM = "file://LICENSE;md5=68f2948d3c4943313d07e084a362486c"
+LIC_FILES_CHKSUM = "file://LICENSE;md5=8bae8b116e2cfd723492b02d9a212fe2"
 
 SRCNAME = "fsnotify"
 
 PKG_NAME = "github.com/fsnotify/${SRCNAME}"
 SRC_URI = "git://${PKG_NAME}.git;branch=main;protocol=https"
 
-SRCREV = "af855d7e6014ec848882bb2ed7d40d536872d275"
-PV = "v1.5.1+git"
+SRCREV = "ae0e7923765f64fb8061396db7edebb558cf6093"
+PV = "1.9.0+git"
 
 inherit meta-virt-depreciated-warning
 

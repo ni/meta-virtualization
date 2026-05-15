@@ -19,17 +19,25 @@ mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 
-# Check for quiet mode (interactive)
+# Check for quiet mode, block device prefix, and init script selection
 QUIET=0
+BLK_PREFIX="vd"
+INIT_SCRIPT="/init"
 for param in $(cat /proc/cmdline 2>/dev/null); do
     case "$param" in
         docker_interactive=1) QUIET=1 ;;
+        vcontainer.blk=*) BLK_PREFIX="${param#vcontainer.blk=}" ;;
+        vcontainer.init=*) INIT_SCRIPT="${param#vcontainer.init=}" ;;
     esac
 done
 
 log() {
     [ "$QUIET" = "0" ] && echo "$@"
 }
+
+# Suppress kernel console messages in interactive mode so they don't
+# pollute the terminal (loop device messages bypass loglevel=0)
+[ "$QUIET" = "1" ] && { dmesg -n 1 2>/dev/null || true; }
 
 log "=== vcontainer preinit (squashfs) ==="
 
@@ -39,11 +47,11 @@ sleep 2
 
 # Show available block devices
 log "Block devices:"
-[ "$QUIET" = "0" ] && ls -la /dev/vd* 2>/dev/null || log "No virtio block devices found"
+[ "$QUIET" = "0" ] && ls -la /dev/${BLK_PREFIX}* 2>/dev/null || log "No /dev/${BLK_PREFIX}* block devices found"
 
-# The rootfs.img is always the first virtio-blk device (/dev/vda)
-# Additional devices (input, state) come after
-ROOTFS_DEV="/dev/vda"
+# The rootfs.img is always the first block device
+# QEMU: /dev/vda, Xen: /dev/xvda
+ROOTFS_DEV="/dev/${BLK_PREFIX}a"
 
 if [ ! -b "$ROOTFS_DEV" ]; then
     echo "ERROR: Rootfs device $ROOTFS_DEV not found!"
@@ -119,9 +127,12 @@ mount --move /dev /mnt/root/dev
 # 2. chroot into it
 # 3. Execute the new init
 # 4. Delete everything in the old initramfs
-log "Switching to real root..."
+log "Switching to real root (init: $INIT_SCRIPT)..."
 
-if [ -x /mnt/root/init ]; then
+if [ -x "/mnt/root${INIT_SCRIPT}" ]; then
+    exec switch_root /mnt/root "$INIT_SCRIPT"
+elif [ -x /mnt/root/init ]; then
+    log "WARNING: $INIT_SCRIPT not found, falling back to /init"
     exec switch_root /mnt/root /init
 elif [ -x /mnt/root/sbin/init ]; then
     exec switch_root /mnt/root /sbin/init

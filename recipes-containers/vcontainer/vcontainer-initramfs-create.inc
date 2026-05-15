@@ -44,12 +44,6 @@ python () {
         d.setVarFlag('do_compile', 'nostamp', '1')
         d.setVarFlag('do_deploy', 'nostamp', '1')
 
-    # Conditionally set mcdepends when our multiconfig is configured
-    # (avoids parse errors when BBMULTICONFIG is not set, e.g. yocto-check-layer)
-    mc = d.getVar('VCONTAINER_MULTICONFIG')
-    bbmulticonfig = (d.getVar('BBMULTICONFIG') or "").split()
-    if mc in bbmulticonfig:
-        d.setVarFlag('do_compile', 'mcdepends', 'mc:%s::virtual/kernel:do_deploy' % mc)
 }
 
 # Only populate native sysroot, skip target sysroot to avoid libgcc conflicts
@@ -58,12 +52,17 @@ INHIBIT_DEFAULT_DEPS = "1"
 # Dependencies:
 # 1. The tiny initramfs image (produces cpio.gz)
 # 2. The multiconfig rootfs image (produces squashfs)
-# 3. The kernel from main build
+# 3. The kernel (deployed transitively via image.bbclass do_build)
 #
-# Both initramfs and rootfs images are in the same multiconfig
-do_compile[depends] = "${VCONTAINER_RUNTIME}-tiny-initramfs-image:do_image_complete"
-do_compile[depends] += "${VCONTAINER_RUNTIME}-rootfs-image:do_image_complete"
-# mcdepends set conditionally in anonymous python below
+# Both image recipes inherit core-image/image.bbclass which has:
+#   do_build[depends] += "virtual/kernel:do_deploy"
+# By depending on do_build (not do_image_complete), we ensure the
+# kernel is deployed to MC_DEPLOY before do_compile copies it.
+# Using do_image_complete cut the chain short — it runs before
+# do_build, so virtual/kernel:do_deploy was not guaranteed to have
+# run, causing missing kernel on sstate-accelerated builds.
+do_compile[depends] = "${VCONTAINER_RUNTIME}-tiny-initramfs-image:do_build"
+do_compile[depends] += "${VCONTAINER_RUNTIME}-rootfs-image:do_build"
 
 S = "${UNPACKDIR}"
 B = "${WORKDIR}/build"
@@ -141,14 +140,18 @@ do_compile() {
     # =========================================================================
     # PART 3: COPY KERNEL
     # =========================================================================
+    # Use the multiconfig's deploy directory (same as initramfs/rootfs),
+    # not DEPLOY_DIR_IMAGE which may point to the main config's deploy
+    # directory. The kernel is built as a dependency of the rootfs image
+    # within the same multiconfig.
     bbnote "Copying kernel image..."
-    KERNEL_FILE="${DEPLOY_DIR_IMAGE}/${KERNEL_IMAGETYPE_INITRAMFS}"
+    KERNEL_FILE="${MC_DEPLOY}/${KERNEL_IMAGETYPE_INITRAMFS}"
     if [ -f "${KERNEL_FILE}" ]; then
         cp "${KERNEL_FILE}" ${B}/kernel
         KERNEL_SIZE=$(stat -c%s ${B}/kernel)
         bbnote "Kernel copied: ${KERNEL_SIZE} bytes ($(expr ${KERNEL_SIZE} / 1024 / 1024)MB)"
     else
-        bbwarn "Kernel not found at ${KERNEL_FILE}"
+        bbwarn "Kernel not found at ${KERNEL_FILE} — check that the vruntime multiconfig kernel is built"
     fi
 }
 

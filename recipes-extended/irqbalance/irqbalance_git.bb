@@ -4,8 +4,8 @@
 
 require irqbalance.inc
 
-SRCREV = "4c234853d5ac9f13d8fe6b618d41a44161de509b"
-PV = "1.9.4+git"
+SRCREV = "cd9212f453db71bec2050c9236c4ce9f17e6d2b4"
+PV = "1.9.5+git"
 
 SRC_URI = "git://github.com/Irqbalance/irqbalance;branch=master;protocol=https \
            file://add-initscript.patch \

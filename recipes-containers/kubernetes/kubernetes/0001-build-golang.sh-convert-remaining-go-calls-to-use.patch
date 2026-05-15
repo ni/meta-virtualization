@@ -14,7 +14,7 @@ Index: kubernetes/hack/lib/golang.sh
 ===================================================================
 --- kubernetes.orig/hack/lib/golang.sh
 +++ kubernetes/hack/lib/golang.sh
-@@ -743,7 +743,7 @@ kube::golang::build_some_binaries() {
+@@ -779,7 +779,7 @@ kube::golang::build_some_binaries() {
          kube::golang::create_coverage_dummy_test "${package}"
          kube::util::trap_add "kube::golang::delete_coverage_dummy_test \"${package}\"" EXIT
  
@@ -23,7 +23,7 @@ Index: kubernetes/hack/lib/golang.sh
            -covermode count \
            -coverpkg k8s.io/... \
            "${build_args[@]}" \
-@@ -755,13 +755,13 @@ kube::golang::build_some_binaries() {
+@@ -791,13 +791,13 @@ kube::golang::build_some_binaries() {
      done
      if [[ "${#uncovered[@]}" != 0 ]]; then
        V=2 kube::log::info "Building ${uncovered[*]} without coverage..."
@@ -39,12 +39,12 @@ Index: kubernetes/hack/lib/golang.sh
    fi
  }
  
-@@ -821,7 +821,7 @@ kube::golang::build_binaries_for_platfor
-     testpkg=$(dirname "${test}")
+@@ -871,7 +871,7 @@ kube::golang::build_binaries_for_platfor
+     if [[ -n "${KUBE_RACE:-}" ]]; then
+       build_args+=("${KUBE_RACE}")
+     fi
+-    go test "${build_args[@]}" "${testpkg}"
++    $GO test "${build_args[@]}" "${testpkg}"
+   done
+ }
  
-     mkdir -p "$(dirname "${outfile}")"
--    go test -c \
-+    $GO test -c \
-       ${goflags:+"${goflags[@]}"} \
-       -gcflags="${gogcflags}" \
-       -ldflags="${goldflags}" \

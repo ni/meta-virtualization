@@ -10,11 +10,41 @@
 #
 # Assuming the image name is "container-base":
 #
-#   If the oci image was a tarball, extract it (skip, if a directory is being directly used)
-#     % tar xvf container-base-<arch>-<stamp>.rootfs-oci-latest-x86_64-linux.oci-image.tar
+#   If the oci image is a tarball, extract it to a temporary directory:
+#     % mkdir -p t && tar xvf container-base-latest-oci.tar -C t
 #
-#   And then create the bundle:
-#     % oci-image-tool create --ref name=latest container-base-<arch>-<stamp>.rootfs-oci container-base-oci-bundle
+#   Create the bundle from the deployed OCI directory symlink (resolve first):
+#     % oci-image-tool create --ref name=latest "$(readlink -f container-base-latest-oci)" container-base-oci-bundle
+#
+#   (If using an extracted tar layout in ./t, this also works:
+#     % oci-image-tool create --ref name=latest t container-base-oci-bundle)
+#
+#   NOTE: oci-image-tool may generate a minimal config.json that lacks the
+#   runtime mounts expected by modern runc. Generate a current runc spec and
+#   merge the image-derived process settings:
+#
+#     % cd container-base-oci-bundle
+#     % cp config.json config.image.json
+#     % rm -f config.json
+#     % XDG_RUNTIME_DIR=/tmp runc spec
+#     % jq -s '\''.[0] as $img | .[1] as $base | $base |
+#         .root.path = ($img.root.path // "rootfs") |
+#         .process.args = ($img.process.args // $base.process.args) |
+#         .process.cwd = ($img.process.cwd // $base.process.cwd) |
+#         .process.user = ($img.process.user // $base.process.user) |
+#         .process.env = (($base.process.env // []) + ($img.process.env // []) | unique)'\'' \
+#         config.image.json config.json > config.merged.json && mv config.merged.json config.json
+#     % cd ..
+#
+#   If your build host architecture matches the target, you can execute the unbundled
+#   container with runc:
+#     % sudo runc run -b container-base-oci-bundle ctr-build
+# / % uname -a
+# Linux mrsdalloway 4.18.0-25-generic #26-Ubuntu SMP Mon Jun 24 09:32:08 UTC 2019 x86_64 GNU/Linux
+#
+#   Cleanup between runs (if needed):
+#     % sudo runc delete -f ctr-build || true
+#     % sudo umount -Rl container-base-oci-bundle/rootfs 2>/dev/null || true
 #
 #   Alternatively, the bundle can be created with umoci (use --rootless if sudo is not available)
 #     % sudo umoci unpack --image container-base-<arch>-<stamp>.rootfs-oci:latest container-base-oci-bundle
@@ -24,14 +54,6 @@
 #
 #     % skopeo copy --dest-creds <username>:<password> oci:container-base-<arch>-<stamp>:latest docker://zeddii/container-base
 #
-#   If your build host architecture matches the target, you can execute the unbundled
-#   container with runc:
-#
-#     % sudo runc run -b container-base-oci-bundle ctr-build
-# / % uname -a
-# Linux mrsdalloway 4.18.0-25-generic #26-Ubuntu SMP Mon Jun 24 09:32:08 UTC 2019 x86_64 GNU/Linux
-#
-
 # We'd probably get this through the container image typdep, but just
 # to be sure, we'll repeat it here.
 ROOTFS_BOOTSTRAP_INSTALL = ""
@@ -492,4 +514,3 @@ def oci_install_layer_packages(d, layer_rootfs, layer_packages, layer_name):
 # the IMAGE_CMD:oci comes from the .inc
 OCI_IMAGE_BACKEND_INC ?= "${@"image-oci-" + "${OCI_IMAGE_BACKEND}" + ".inc"}"
 include ${OCI_IMAGE_BACKEND_INC}
-

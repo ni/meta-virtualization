@@ -16,9 +16,9 @@ DEPENDS = " \
     gettext-native \
 "
 
-SRCREV = "ec1b7c989f172bb46f6c4c629c9ce29e07d97ca5"
+SRCREV = "88c5aaeec667af94c4fe3a5c2c7a42f8cf308b93"
 SRC_URI = " \
-    git://github.com/containers/libpod.git;branch=v5.7;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+    git://github.com/containers/podman.git;branch=v5.8;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
     ${@bb.utils.contains('PACKAGECONFIG', 'rootless', 'file://50-podman-rootless.conf', '', d)} \
 "
 
@@ -27,16 +27,22 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3d9b931fa23ab1cacd0087f9e2ee12
 
 GO_IMPORT = "import"
 
-PV = "v5.7.1"
+PV = "5.8.3-dev"
 
 CVE_STATUS[CVE-2022-2989] = "fixed-version: fixed since v4.3.0"
 CVE_STATUS[CVE-2023-0778] = "fixed-version: fixed since v4.5.0"
 
 PACKAGES =+ "${PN}-contrib"
 
-PODMAN_PKG = "github.com/containers/libpod"
+PODMAN_PKG = "github.com/containers/podman"
 
-BUILDTAGS_EXTRA ?= "${@bb.utils.contains('VIRTUAL-RUNTIME_container_networking','cni','cni','',d)}"
+# Include the cni build tag unless the distro explicitly selects netavark-only.
+# The runtime backend is selected via containers.conf (network_backend),
+# but podman must be compiled with the cni tag to support it at all.
+# Previously this was gated on VIRTUAL-RUNTIME_container_networking == "cni",
+# which excluded cni in vruntime builds where that variable is intentionally
+# blank (vpdmn-rootfs-image installs cni packages directly in IMAGE_INSTALL).
+BUILDTAGS_EXTRA ?= "${@'' if d.getVar('VIRTUAL-RUNTIME_container_networking') == 'netavark' else 'cni'}"
 BUILDTAGS ?= "seccomp varlink \
 ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', 'systemd', '', d)} \
 exclude_graphdriver_btrfs exclude_graphdriver_devicemapper ${BUILDTAGS_EXTRA}"

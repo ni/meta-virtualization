@@ -17,9 +17,9 @@
 #   OCI_MULTIARCH_RECIPE = "myapp-container"
 #   OCI_MULTIARCH_PLATFORMS = "aarch64 x86_64"
 #
-#   # Optional: custom multiconfig mapping
-#   OCI_MULTIARCH_MC[aarch64] = "vruntime-aarch64"
-#   OCI_MULTIARCH_MC[x86_64] = "vruntime-x86-64"
+#   # Optional: custom multiconfig mapping (defaults use vcontainer distro)
+#   OCI_MULTIARCH_MC[aarch64] = "container-aarch64"
+#   OCI_MULTIARCH_MC[x86_64] = "container-x86-64"
 #
 # OUTPUT:
 #   ${DEPLOY_DIR_IMAGE}/${PN}-multiarch-oci/
@@ -28,8 +28,8 @@
 #     blobs/sha256/     - Combined blobs from all architectures
 #
 # REQUIREMENTS:
-#   - Multiconfig must be enabled in local.conf:
-#       BBMULTICONFIG = "vruntime-aarch64 vruntime-x86-64"
+#   - Multiconfig must be enabled (meta-virt-host.conf provides defaults):
+#       BBMULTICONFIG = "... container-aarch64 container-x86-64"
 #   - OCI_MULTIARCH_RECIPE must inherit image-oci or produce OCI output
 #
 # ===========================================================================
@@ -42,9 +42,9 @@ INHIBIT_DEFAULT_DEPS = "1"
 OCI_MULTIARCH_RECIPE ?= ""
 OCI_MULTIARCH_PLATFORMS ?= ""
 
-# Default multiconfig mapping (uses existing vruntime-* configs)
-OCI_MULTIARCH_MC[aarch64] ?= "vruntime-aarch64"
-OCI_MULTIARCH_MC[x86_64] ?= "vruntime-x86-64"
+# Default multiconfig mapping (uses vcontainer distro -- no BBMASK)
+OCI_MULTIARCH_MC[aarch64] ?= "container-aarch64"
+OCI_MULTIARCH_MC[x86_64] ?= "container-x86-64"
 
 # Machine mapping for deploy directory paths
 OCI_MULTIARCH_MACHINE[aarch64] ?= "qemuarm64"
@@ -87,7 +87,7 @@ python __anonymous() {
         mc = d.getVarFlag('OCI_MULTIARCH_MC', platform)
         if not mc:
             bb.fatal(f"No multiconfig defined for platform '{platform}'. Set OCI_MULTIARCH_MC[{platform}]")
-        mcdepends.append(f"mc::{mc}:{recipe}:do_image_oci")
+        mcdepends.append(f"mc::{mc}:{recipe}:do_image_complete")
 
     # Set the mcdepends for our main task
     d.setVarFlag('do_create_multiarch_index', 'mcdepends', ' '.join(mcdepends))
@@ -191,17 +191,40 @@ python do_create_multiarch_index() {
     if not index_manifests:
         bb.fatal("No manifests collected - cannot create multi-arch index")
 
-    # Create the OCI Image Index
+    # Create the OCI Image Index as a blob (not directly in index.json).
+    # skopeo requires index.json to reference a single entry; the actual
+    # multi-platform manifest list lives in blobs/sha256/ and index.json
+    # points to it.
     image_index = {
         'schemaVersion': 2,
         'mediaType': 'application/vnd.oci.image.index.v1+json',
         'manifests': index_manifests
     }
 
-    # Write index.json
+    image_index_json = json.dumps(image_index, indent=2).encode('utf-8')
+    image_index_digest = hashlib.sha256(image_index_json).hexdigest()
+    image_index_size = len(image_index_json)
+
+    # Write the image index as a blob
+    blob_path = os.path.join(output_dir, 'blobs', 'sha256', image_index_digest)
+    with open(blob_path, 'wb') as f:
+        f.write(image_index_json)
+
+    # Write index.json pointing to the image index blob
+    top_index = {
+        'schemaVersion': 2,
+        'manifests': [
+            {
+                'mediaType': 'application/vnd.oci.image.index.v1+json',
+                'digest': f'sha256:{image_index_digest}',
+                'size': image_index_size
+            }
+        ]
+    }
+
     index_path = os.path.join(output_dir, 'index.json')
     with open(index_path, 'w') as f:
-        json.dump(image_index, f, indent=2)
+        json.dump(top_index, f, indent=2)
 
     # Write oci-layout
     layout_path = os.path.join(output_dir, 'oci-layout')

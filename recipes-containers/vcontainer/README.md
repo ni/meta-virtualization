@@ -268,6 +268,109 @@ vdkr pull alpine:latest
 vdkr images   # Shows alpine:latest
 ```
 
+## Registry Login and Configuration
+
+For authenticated registries:
+
+```bash
+# Login (interactive password prompt)
+vdkr login --username myuser https://registry.example.com/
+
+# Pull from the registry
+vdkr pull registry.example.com/myimage:latest
+```
+
+Set a default registry so you don't need to specify the full URL each time:
+
+```bash
+# Set default registry (persisted across sessions)
+vdkr vconfig registry registry.example.com
+
+# Now pulls try the default registry first, then Docker Hub
+vdkr pull myimage:latest
+
+# One-off override without changing the default
+vdkr --registry other.registry.com pull myimage:latest
+
+# Clear default registry
+vdkr vconfig registry --reset
+```
+
+**Note:** The `--registry` flag is a vdkr option that sets the default
+registry for pulls. For `login`, pass the registry URL as a positional
+argument after the login flags:
+
+```bash
+# Correct:
+vdkr login --username myuser https://registry.example.com/
+
+# Wrong (--registry is consumed by vdkr, login gets no URL):
+vdkr --registry https://registry.example.com/ login --username myuser
+```
+
+**TLS certificates:** The vdkr/vpdmn rootfs images include common
+intermediate certificates (Let's Encrypt E8/R11) to handle registries
+that don't send the full certificate chain. For self-signed registries,
+use `--secure-registry --ca-cert`:
+
+```bash
+vdkr --secure-registry --ca-cert /path/to/ca.crt pull myimage
+```
+
+### Passing an existing docker/podman auth file (`--config`)
+
+If you already have credentials set up on the host (for example, from
+running `docker login` locally), you can pass the resulting auth file
+straight through into the emulated environment instead of re-entering
+credentials with `--registry-user`/`--registry-pass`:
+
+```bash
+# Docker (vdkr): uses ~/.docker/config.json by default
+vdkr --config ~/.docker/config.json pull registry.example.com/myimage
+
+# Podman (vpdmn): uses $XDG_RUNTIME_DIR/containers/auth.json
+vpdmn --config $XDG_RUNTIME_DIR/containers/auth.json pull registry.example.com/myimage
+```
+
+The path can also be supplied via environment:
+
+```bash
+export VDKR_CONFIG=$HOME/.docker/config.json
+vdkr pull registry.example.com/myimage
+```
+
+(`VPDMN_CONFIG` is honoured identically by `vpdmn`.)
+
+**What the file ends up as inside the VM:**
+
+| Tool  | Target path                       | Notes                                             |
+| ----- | --------------------------------- | ------------------------------------------------- |
+| vdkr  | `/root/.docker/config.json`       | Mode 0600; containing dir 0700                    |
+| vpdmn | `/run/containers/0/auth.json`     | Mode 0600; `$REGISTRY_AUTH_FILE` exported         |
+
+**Security model.** The credential file is treated as secret material:
+
+- The host-side file **must** be a regular file with mode `0600` or `0400`.
+  World/group-readable files are rejected outright. Symlinks are rejected.
+  Files larger than 1 MiB are rejected.
+- On the host it is copied into a per-invocation private directory under
+  `$TMPDIR/vdkr-$$/auth_share` (mode 0700; file mode 0400) and removed
+  automatically by the `EXIT`/`INT`/`TERM` trap when `vrunner.sh` exits.
+- It is exposed to the guest on a **dedicated** virtio-9p share whose
+  mount tag (`vdkr_auth` / `vpdmn_auth`) is distinct from the general
+  `*_share` share used for input/output. The guest mounts it **read-only**
+  at `/mnt/auth`, copies it into the runtime's credential location, then
+  **unmounts** `/mnt/auth` so nothing in the VM retains an open reference
+  to the host staging directory.
+- Nothing about the file appears on the kernel command line. Only a
+  boolean flag (`docker_auth=1` / `podman_auth=1`) is passed so the guest
+  init script knows to look on the auth share.
+- When both `--config` and `--registry-user`/`--registry-pass` are
+  supplied, `--config` wins and a NOTE is logged.
+- `--config` is NOT forwarded into container workloads (it only reaches
+  the container engine's credential store); containers themselves never
+  see `/mnt/auth`.
+
 ## Volume Mounts
 
 Mount host directories into containers using `-v` (requires memory resident mode):

@@ -7,12 +7,12 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=c6dd79b6ec2130a3364f6fa9d6380408 \
     file://LICENSE-Apache2.0;md5=3b83ef96387f14655fc854ddc3c6bd57 \
 "
 
-SRCREV = "b04c475f3147fd849bac6b3d41e1302b222c8406"
+SRCREV = "0052a66dfa463186dc286d75079d451030468e0f"
 SRC_URI = "git://github.com/canonical/cloud-init;branch=main;protocol=https \
            file://cloud-init-source-local-lsb-functions.patch \
 "
 
-PV = "v25.2.0+git"
+PV = "26.1.0+git"
 
 DISTUTILS_INSTALL_ARGS:append = " ${@bb.utils.contains('DISTRO_FEATURES', 'sysvinit', '--init-system=sysvinit_deb', '', d)}"
 DISTUTILS_INSTALL_ARGS:append = " ${@bb.utils.contains('DISTRO_FEATURES', 'systemd', '--init-system=systemd', '', d)}"

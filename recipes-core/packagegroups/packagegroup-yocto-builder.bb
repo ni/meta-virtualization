@@ -8,6 +8,9 @@ PACKAGE_ARCH = "${TUNE_PKGARCH}"
 
 inherit packagegroup
 
+inherit features_check
+REQUIRED_DISTRO_FEATURES ?= "systemd"
+
 PACKAGES = "\
     packagegroup-yocto-builder \
     packagegroup-yocto-builder-base \

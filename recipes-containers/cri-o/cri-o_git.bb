@@ -14,9 +14,9 @@ At a high level, we expect the scope of cri-o to be restricted to the following 
  - Resource isolation as required by the CRI \
  "
 
-SRCREV_cri-o = "5780ac7b4fb93ffe2e4d1fc038adb1442c6155c3"
+SRCREV_cri-o = "8273bca378a36dd225fcaf90b6b732cc4c6d4248"
 SRC_URI = "\
-	git://github.com/cri-o/cri-o.git;branch=release-1.34;name=cri-o;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
+	git://github.com/cri-o/cri-o.git;branch=release-1.36;name=cri-o;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
         file://crio.conf \
         file://run-ptest \
 	"
@@ -27,7 +27,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=e3fc50a88d0a364313df4b21ef20c2
 
 GO_IMPORT = "import"
 
-PV = "1.34.1+git"
+PV = "1.35.0+git"
 
 inherit features_check ptest
 REQUIRED_DISTRO_FEATURES ?= "seccomp"

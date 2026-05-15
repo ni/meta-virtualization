@@ -327,27 +327,43 @@ normalize_arch_from_oci() {
     esac
 }
 
-# Check if OCI directory contains a multi-architecture Image Index
-# Usage: is_oci_image_index <oci_dir>
-# Returns: 0 if multi-arch, 1 if single-arch or not OCI
-is_oci_image_index() {
+# Resolve the file containing platform manifests in an OCI directory.
+# Handles two layouts:
+#   Flat:   index.json directly contains manifests with platform info
+#   Nested: index.json → single image index blob → platform manifests
+#           (skopeo-compatible format)
+# Usage: _resolve_oci_platform_file <oci_dir>
+# Prints: path to the file containing platform manifests, or empty
+_resolve_oci_platform_file() {
     local oci_dir="$1"
 
     [ -f "$oci_dir/index.json" ] || return 1
 
-    # Check if index.json has manifests with platform info
-    # Multi-arch images have "platform" object in manifest entries
+    # Flat layout: platform info directly in index.json
     if grep -q '"platform"' "$oci_dir/index.json" 2>/dev/null; then
-        # Also verify there are multiple manifests
-        local manifest_count=$(grep -c '"digest"' "$oci_dir/index.json" 2>/dev/null || echo "0")
-        [ "$manifest_count" -gt 1 ] && return 0
-
-        # Single manifest with platform info is also a valid Image Index
-        # (could be a multi-arch image built with only one arch so far)
+        echo "$oci_dir/index.json"
         return 0
     fi
 
+    # Nested layout: index.json has a single entry with image.index mediaType
+    if grep -q 'image\.index' "$oci_dir/index.json" 2>/dev/null; then
+        local index_digest=$(grep -o '"sha256:[a-f0-9]*"' "$oci_dir/index.json" 2>/dev/null | head -1 | tr -d '"' | sed 's/sha256://')
+        if [ -n "$index_digest" ] && [ -f "$oci_dir/blobs/sha256/$index_digest" ]; then
+            if grep -q '"platform"' "$oci_dir/blobs/sha256/$index_digest" 2>/dev/null; then
+                echo "$oci_dir/blobs/sha256/$index_digest"
+                return 0
+            fi
+        fi
+    fi
+
     return 1
+}
+
+# Check if OCI directory contains a multi-architecture Image Index
+# Usage: is_oci_image_index <oci_dir>
+# Returns: 0 if multi-arch, 1 if single-arch or not OCI
+is_oci_image_index() {
+    _resolve_oci_platform_file "$1" >/dev/null 2>&1
 }
 
 # Get list of available platforms in a multi-arch OCI Image Index
@@ -355,12 +371,10 @@ is_oci_image_index() {
 # Returns: Space-separated list of architectures (e.g., "arm64 amd64")
 get_oci_platforms() {
     local oci_dir="$1"
+    local platform_file
+    platform_file=$(_resolve_oci_platform_file "$oci_dir") || return 1
 
-    [ -f "$oci_dir/index.json" ] || return 1
-
-    # Extract architecture values from platform objects
-    # Format: "platform": { "architecture": "arm64", "os": "linux" }
-    grep -o '"architecture"[[:space:]]*:[[:space:]]*"[^"]*"' "$oci_dir/index.json" 2>/dev/null | \
+    grep -o '"architecture"[[:space:]]*:[[:space:]]*"[^"]*"' "$platform_file" 2>/dev/null | \
         sed 's/.*"\([^"]*\)"$/\1/' | \
         tr '\n' ' ' | sed 's/ $//'
 }
@@ -373,38 +387,34 @@ select_platform_manifest() {
     local oci_dir="$1"
     local target_arch="$2"
 
-    [ -f "$oci_dir/index.json" ] || return 1
-
     # Normalize target arch to OCI convention
     local oci_arch=$(normalize_arch_to_oci "$target_arch")
 
-    # Parse index.json to find manifest with matching platform
+    # Resolve the file containing platform manifests (flat or nested)
+    local manifest_index
+    manifest_index=$(_resolve_oci_platform_file "$oci_dir") || return 1
+
+    # Parse the manifest index to find manifest with matching platform
     # This is done without jq using grep/sed for portability
     local in_manifest=0
     local current_digest=""
     local current_arch=""
     local matched_digest=""
 
-    # Read index.json line by line
     while IFS= read -r line; do
-        # Track when we're inside a manifest entry
         if echo "$line" | grep -q '"manifests"'; then
             in_manifest=1
             continue
         fi
 
         if [ "$in_manifest" = "1" ]; then
-            # Extract digest
             if echo "$line" | grep -q '"digest"'; then
                 current_digest=$(echo "$line" | sed 's/.*"sha256:\([a-f0-9]*\)".*/\1/')
             fi
 
-            # Extract architecture from platform
-            # Handle both formats: "architecture": "arm64" or {"architecture": "arm64", ...}
             if echo "$line" | grep -q '"architecture"'; then
                 current_arch=$(echo "$line" | sed 's/.*"architecture"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
 
-                # Check if this matches our target
                 if [ "$current_arch" = "$oci_arch" ]; then
                     matched_digest="$current_digest"
                     OCI_SELECTED_PLATFORM="$current_arch"
@@ -412,13 +422,12 @@ select_platform_manifest() {
                 fi
             fi
 
-            # Reset on closing brace (end of manifest entry)
             if echo "$line" | grep -q '^[[:space:]]*}'; then
                 current_digest=""
                 current_arch=""
             fi
         fi
-    done < "$oci_dir/index.json"
+    done < "$manifest_index"
 
     if [ -n "$matched_digest" ]; then
         echo "$matched_digest"
@@ -486,6 +495,105 @@ EOF
     return 0
 }
 
+# ============================================================================
+# Host-side OCI Image Cache (Xen standalone path)
+# ============================================================================
+# Cache layout:
+#   ~/.vxn/images/refs/     - Symlinks from normalized image names to store dirs
+#   ~/.vxn/images/store/    - Content-addressed OCI layout dirs by manifest digest
+
+VXN_IMAGE_CACHE="${VXN_IMAGE_CACHE:-$HOME/.vxn/images}"
+
+vxn_normalize_image_name() {
+    # alpine → docker.io/library/alpine:latest
+    # nginx:1.25 → docker.io/library/nginx:1.25
+    # ghcr.io/foo/bar → ghcr.io/foo/bar:latest
+    local name="$1"
+    # Add default registry
+    case "$name" in
+        *.*/*) ;;                             # has registry (contains . before /)
+        */*) name="docker.io/$name" ;;        # has namespace, no registry
+        *)   name="docker.io/library/$name" ;; # bare name
+    esac
+    # Add default tag
+    case "$name" in
+        *:*) ;;                               # already has tag/digest
+        *)   name="$name:latest" ;;
+    esac
+    echo "$name"
+}
+
+vxn_image_ref_key() {
+    # docker.io/library/alpine:latest → docker.io_library_alpine:latest
+    local name="$1"
+    echo "$name" | tr '/' '_'
+}
+
+vxn_image_cache_lookup() {
+    # Returns OCI dir path if cached, empty if not
+    local image="$1"
+    local normalized ref_key ref_link
+    normalized=$(vxn_normalize_image_name "$image")
+    ref_key=$(vxn_image_ref_key "$normalized")
+    ref_link="$VXN_IMAGE_CACHE/refs/$ref_key"
+    if [ -L "$ref_link" ] && [ -d "$ref_link" ]; then
+        readlink -f "$ref_link"
+    fi
+}
+
+vxn_image_cache_store() {
+    # Store OCI dir in cache, create ref symlink
+    # $1 = image name, $2 = source OCI dir
+    local image="$1" oci_dir="$2"
+    local normalized ref_key manifest_digest store_dir
+    normalized=$(vxn_normalize_image_name "$image")
+    ref_key=$(vxn_image_ref_key "$normalized")
+
+    mkdir -p "$VXN_IMAGE_CACHE/refs" "$VXN_IMAGE_CACHE/store/sha256"
+
+    # Get manifest digest for content-addressed storage
+    manifest_digest=$(grep -o '"sha256:[a-f0-9]*"' "$oci_dir/index.json" 2>/dev/null | head -1 | tr -d '"')
+    manifest_digest="${manifest_digest#sha256:}"
+    if [ -z "$manifest_digest" ]; then
+        # Fallback: hash the index.json itself
+        manifest_digest=$(sha256sum "$oci_dir/index.json" | cut -d' ' -f1)
+    fi
+
+    store_dir="$VXN_IMAGE_CACHE/store/sha256/$manifest_digest"
+    if [ ! -d "$store_dir" ]; then
+        cp -a "$oci_dir" "$store_dir"
+    fi
+
+    # Create/update ref symlink (relative path)
+    ln -sfn "../store/sha256/$manifest_digest" "$VXN_IMAGE_CACHE/refs/$ref_key"
+}
+
+vxn_image_cache_inspect() {
+    # Print OCI config info (Entrypoint, Cmd, Env, WorkingDir)
+    local oci_dir="$1"
+    if ! command -v jq >/dev/null 2>&1; then
+        echo "jq not found, cannot inspect image" >&2
+        return 1
+    fi
+    local manifest_digest config_digest manifest_file config_file
+    manifest_digest=$(jq -r '.manifests[0].digest' "$oci_dir/index.json" 2>/dev/null)
+    manifest_file="$oci_dir/blobs/${manifest_digest/://}"
+    [ -f "$manifest_file" ] || { echo "Manifest not found" >&2; return 1; }
+    config_digest=$(jq -r '.config.digest' "$manifest_file" 2>/dev/null)
+    config_file="$oci_dir/blobs/${config_digest/://}"
+    [ -f "$config_file" ] || { echo "Config not found" >&2; return 1; }
+    jq '{
+        Entrypoint: .config.Entrypoint,
+        Cmd: .config.Cmd,
+        Env: .config.Env,
+        WorkingDir: .config.WorkingDir,
+        ExposedPorts: .config.ExposedPorts,
+        Labels: .config.Labels,
+        Architecture: .architecture,
+        Os: .os
+    }' "$config_file"
+}
+
 show_usage() {
     local PROG_NAME=$(basename "$0")
     local RUNTIME_UPPER=$(echo "$VCONTAINER_RUNTIME_CMD" | sed 's/./\U&/')
@@ -539,6 +647,7 @@ ${BOLD}${RUNTIME_UPPER}-COMPATIBLE COMMANDS:${NC}
 ${BOLD}EXTENDED COMMANDS (${VCONTAINER_RUNTIME_NAME}-specific):${NC}
     ${CYAN}vimport${NC} <path> [name:tag]    Import from OCI dir, tarball, or directory (auto-detect)
                                  Multi-arch OCI Image Index supported (auto-selects platform)
+    ${CYAN}bundle${NC} <image> <dir> [-- cmd]  Create OCI bundle from image (for vxn-oci-runtime)
     ${CYAN}vrun${NC} [opts] <image> [cmd]    Run command, clearing entrypoint (see RUN vs VRUN below)
     ${CYAN}vstorage${NC}                     List all storage directories (alias: vstorage list)
     ${CYAN}vstorage list${NC}                List all storage directories with details
@@ -618,6 +727,11 @@ ${BOLD}GLOBAL OPTIONS:${NC}
     --registry <url>      Default registry for unqualified images (e.g., 10.0.2.2:5000/yocto)
     --no-registry         Disable baked-in default registry (use images as-is)
     --insecure-registry <host:port>  Mark registry as insecure (HTTP). Can repeat.
+    --config <path>       Registry auth file (docker config.json / podman auth.json)
+                          Defaults to \$VDKR_CONFIG / \$VPDMN_CONFIG. The file must be
+                          mode 0600 or stricter; it is passed to the guest over a
+                          dedicated read-only virtio-9p share and never appears on
+                          the kernel cmdline.
     --verbose, -v         Enable verbose output
     --help, -h            Show this help
 
@@ -757,6 +871,10 @@ build_runner_args() {
     [ -n "$CA_CERT" ] && args+=("--ca-cert" "$CA_CERT")
     [ -n "$REGISTRY_USER" ] && args+=("--registry-user" "$REGISTRY_USER")
     [ -n "$REGISTRY_PASS" ] && args+=("--registry-pass" "$REGISTRY_PASS")
+    [ -n "$AUTH_CONFIG" ] && args+=("--config" "$AUTH_CONFIG")
+
+    # Xen: pass exit grace period
+    [ -n "${VXN_EXIT_GRACE_PERIOD:-}" ] && args+=("--exit-grace-period" "$VXN_EXIT_GRACE_PERIOD")
 
     echo "${args[@]}"
 }
@@ -777,6 +895,11 @@ SECURE_REGISTRY="false"
 CA_CERT=""
 REGISTRY_USER=""
 REGISTRY_PASS=""
+# Registry auth config file. Env-var default depends on which CLI wrapper is
+# in use (vdkr → $VDKR_CONFIG, vpdmn → $VPDMN_CONFIG), then falls back to the
+# other for convenience when sharing a single host-side file. Overridden by
+# the --config CLI flag below.
+AUTH_CONFIG="${VDKR_CONFIG:-${VPDMN_CONFIG:-}}"
 COMMAND=""
 COMMAND_ARGS=()
 
@@ -872,6 +995,13 @@ while [ $# -gt 0 ]; do
             ;;
         --registry-password|--registry-pass)
             REGISTRY_PASS="$2"
+            shift 2
+            ;;
+        --config)
+            # Path to a docker/podman registry auth file (config.json / auth.json).
+            # Overrides $VDKR_CONFIG / $VPDMN_CONFIG. Forwarded to vrunner.sh --config,
+            # which validates the file and stages it on a dedicated read-only 9p share.
+            AUTH_CONFIG="$2"
             shift 2
             ;;
         -it|--interactive)
@@ -1386,6 +1516,78 @@ parse_and_prepare_volumes() {
     done
 }
 
+# ============================================================================
+# VXN Container State Helpers (Xen per-container DomU)
+# ============================================================================
+
+# VXN container state directory
+vxn_container_dir() { echo "$HOME/.vxn/containers/$1"; }
+
+vxn_container_is_running() {
+    local cdir="$(vxn_container_dir "$1")"
+    [ -f "$cdir/daemon.domname" ] || return 1
+    local domname=$(cat "$cdir/daemon.domname")
+    xl list "$domname" >/dev/null 2>&1
+}
+
+# Query entrypoint status from a running vxn container.
+# Returns: "Running", "Exited (<code>)", or "Unknown"
+vxn_container_status() {
+    local name="$1"
+    local cdir="$(vxn_container_dir "$name")"
+
+    # DomU not alive at all
+    if ! vxn_container_is_running "$name"; then
+        echo "Exited"
+        return
+    fi
+
+    # Query the guest via PTY for entrypoint status
+    local pty_file="$cdir/daemon.pty"
+    if [ -f "$pty_file" ]; then
+        local pty
+        pty=$(cat "$pty_file")
+        if [ -c "$pty" ]; then
+            # Open PTY, send STATUS query, read response
+            local status_line=""
+            exec 4<>"$pty"
+            # Drain pending output
+            while IFS= read -t 0.3 -r _discard <&4; do :; done
+            echo "===STATUS===" >&4
+            while IFS= read -t 3 -r status_line <&4; do
+                status_line=$(echo "$status_line" | tr -d '\r')
+                case "$status_line" in
+                    *"===RUNNING==="*)
+                        exec 4<&- 4>&- 2>/dev/null
+                        echo "Running"
+                        return
+                        ;;
+                    *"===EXITED="*"==="*)
+                        local code=$(echo "$status_line" | sed 's/.*===EXITED=\([0-9]*\)===/\1/')
+                        exec 4<&- 4>&- 2>/dev/null
+                        echo "Exited ($code)"
+                        return
+                        ;;
+                esac
+            done
+            exec 4<&- 4>&- 2>/dev/null
+        fi
+    fi
+
+    # Could not determine — DomU is alive but status query failed
+    echo "Running"
+}
+
+# Xen: error helper for unsupported commands
+vxn_unsupported() {
+    echo "${VCONTAINER_RUNTIME_NAME}: '$1' is not supported (VM is the container, no runtime inside)" >&2
+    exit 1
+}
+vxn_not_yet() {
+    echo "${VCONTAINER_RUNTIME_NAME}: '$1' is not yet supported" >&2
+    exit 1
+}
+
 # Handle commands
 case "$COMMAND" in
     image)
@@ -1400,6 +1602,96 @@ case "$COMMAND" in
         fi
         SUBCMD="${COMMAND_ARGS[0]}"
         SUBCMD_ARGS=("${COMMAND_ARGS[@]:1}")
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            # Xen: delegate to cache-based image subcommands
+            case "$SUBCMD" in
+                ls|list)
+                    printf "%-40s %-15s %-12s\n" "REPOSITORY:TAG" "SIZE" "CACHED"
+                    if [ -d "$VXN_IMAGE_CACHE/refs" ]; then
+                        for ref in "$VXN_IMAGE_CACHE/refs"/*; do
+                            [ -L "$ref" ] || continue
+                            _vxn_ref_name=$(basename "$ref" | tr '_' '/')
+                            _vxn_store_dir=$(readlink -f "$ref")
+                            _vxn_size="unknown"
+                            [ -d "$_vxn_store_dir" ] && _vxn_size=$(du -sh "$_vxn_store_dir" 2>/dev/null | cut -f1)
+                            printf "%-40s %-15s %-12s\n" "$_vxn_ref_name" "$_vxn_size" "yes"
+                        done
+                    fi
+                    exit 0
+                    ;;
+                rm|remove)
+                    [ ${#SUBCMD_ARGS[@]} -lt 1 ] && { echo "rmi requires <image>" >&2; exit 1; }
+                    _vxn_normalized=$(vxn_normalize_image_name "${SUBCMD_ARGS[0]}")
+                    _vxn_ref_key=$(vxn_image_ref_key "$_vxn_normalized")
+                    _vxn_ref_link="$VXN_IMAGE_CACHE/refs/$_vxn_ref_key"
+                    if [ -L "$_vxn_ref_link" ]; then
+                        _vxn_store_dir=$(readlink -f "$_vxn_ref_link")
+                        rm -f "$_vxn_ref_link"
+                        _vxn_other_refs=$(find "$VXN_IMAGE_CACHE/refs" -lname "*/$(basename "$_vxn_store_dir")" 2>/dev/null | wc -l)
+                        [ "$_vxn_other_refs" -eq 0 ] && rm -rf "$_vxn_store_dir"
+                        echo "Removed: $_vxn_normalized"
+                    else
+                        echo "Image not found: $_vxn_normalized" >&2; exit 1
+                    fi
+                    exit 0
+                    ;;
+                pull)
+                    [ ${#SUBCMD_ARGS[@]} -lt 1 ] && { echo "pull requires <image>" >&2; exit 1; }
+                    IMAGE_NAME="${SUBCMD_ARGS[0]}"
+                    command -v skopeo >/dev/null 2>&1 || { echo "skopeo not found" >&2; exit 1; }
+                    _vxn_normalized=$(vxn_normalize_image_name "$IMAGE_NAME")
+                    echo "Pulling $_vxn_normalized..."
+                    _vxn_tmpoci="$(mktemp -d)/oci-image"
+                    if skopeo copy "docker://$_vxn_normalized" "oci:$_vxn_tmpoci:latest" 2>&1; then
+                        vxn_image_cache_store "$IMAGE_NAME" "$_vxn_tmpoci"
+                        rm -rf "$(dirname "$_vxn_tmpoci")"
+                        echo "Pulled: $_vxn_normalized"
+                    else
+                        rm -rf "$(dirname "$_vxn_tmpoci")"
+                        echo "Failed to pull $_vxn_normalized" >&2; exit 1
+                    fi
+                    exit 0
+                    ;;
+                inspect)
+                    [ ${#SUBCMD_ARGS[@]} -lt 1 ] && { echo "inspect requires <image>" >&2; exit 1; }
+                    _vxn_cached_oci=$(vxn_image_cache_lookup "${SUBCMD_ARGS[0]}")
+                    if [ -n "$_vxn_cached_oci" ]; then
+                        vxn_image_cache_inspect "$_vxn_cached_oci"
+                    else
+                        echo "Image not found: ${SUBCMD_ARGS[0]}" >&2; exit 1
+                    fi
+                    exit 0
+                    ;;
+                tag)
+                    [ ${#SUBCMD_ARGS[@]} -lt 2 ] && { echo "tag requires <source> <target>" >&2; exit 1; }
+                    _vxn_src_oci=$(vxn_image_cache_lookup "${SUBCMD_ARGS[0]}")
+                    if [ -z "$_vxn_src_oci" ]; then
+                        echo "Image not found: ${SUBCMD_ARGS[0]}" >&2; exit 1
+                    fi
+                    _vxn_target_normalized=$(vxn_normalize_image_name "${SUBCMD_ARGS[1]}")
+                    _vxn_target_ref_key=$(vxn_image_ref_key "$_vxn_target_normalized")
+                    mkdir -p "$VXN_IMAGE_CACHE/refs"
+                    # Point new ref to same store dir
+                    _vxn_store_base=$(basename "$_vxn_src_oci")
+                    ln -sfn "../store/sha256/$_vxn_store_base" "$VXN_IMAGE_CACHE/refs/$_vxn_target_ref_key"
+                    echo "Tagged: $_vxn_target_normalized"
+                    exit 0
+                    ;;
+                push)
+                    vxn_not_yet "image push"
+                    ;;
+                prune)
+                    vxn_not_yet "image prune"
+                    ;;
+                history)
+                    vxn_not_yet "image history"
+                    ;;
+                *)
+                    echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} Unknown image subcommand: $SUBCMD" >&2
+                    exit 1
+                    ;;
+            esac
+        fi
         case "$SUBCMD" in
             ls|list)
                 run_runtime_command "$VCONTAINER_RUNTIME_CMD images ${SUBCMD_ARGS[*]}"
@@ -1448,13 +1740,26 @@ case "$COMMAND" in
         ;;
 
     images)
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            printf "%-40s %-15s %-12s\n" "REPOSITORY:TAG" "SIZE" "CACHED"
+            if [ -d "$VXN_IMAGE_CACHE/refs" ]; then
+                for ref in "$VXN_IMAGE_CACHE/refs"/*; do
+                    [ -L "$ref" ] || continue
+                    _vxn_ref_name=$(basename "$ref" | tr '_' '/')
+                    _vxn_store_dir=$(readlink -f "$ref")
+                    _vxn_size="unknown"
+                    [ -d "$_vxn_store_dir" ] && _vxn_size=$(du -sh "$_vxn_store_dir" 2>/dev/null | cut -f1)
+                    printf "%-40s %-15s %-12s\n" "$_vxn_ref_name" "$_vxn_size" "yes"
+                done
+            fi
+            exit 0
+        fi
         # runtime images
         run_runtime_command "$VCONTAINER_RUNTIME_CMD images ${COMMAND_ARGS[*]}"
         ;;
 
     pull)
         # runtime pull <image>
-        # Daemon mode already has networking enabled, so this works via daemon
         if [ ${#COMMAND_ARGS[@]} -lt 1 ]; then
             echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} pull requires <image>" >&2
             exit 1
@@ -1462,6 +1767,24 @@ case "$COMMAND" in
 
         IMAGE_NAME="${COMMAND_ARGS[0]}"
 
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            # Host-side pull via skopeo → cache
+            command -v skopeo >/dev/null 2>&1 || { echo "skopeo not found" >&2; exit 1; }
+            _vxn_normalized=$(vxn_normalize_image_name "$IMAGE_NAME")
+            echo "Pulling $_vxn_normalized..."
+            _vxn_tmpoci="$(mktemp -d)/oci-image"
+            if skopeo copy "docker://$_vxn_normalized" "oci:$_vxn_tmpoci:latest" 2>&1; then
+                vxn_image_cache_store "$IMAGE_NAME" "$_vxn_tmpoci"
+                rm -rf "$(dirname "$_vxn_tmpoci")"
+                echo "Pulled: $_vxn_normalized"
+            else
+                rm -rf "$(dirname "$_vxn_tmpoci")"
+                echo "Failed to pull $_vxn_normalized" >&2; exit 1
+            fi
+            exit 0
+        fi
+
+        # Daemon mode already has networking enabled, so this works via daemon
         if daemon_is_running; then
             # Use daemon mode (already has networking)
             run_runtime_command "$VCONTAINER_RUNTIME_CMD pull $IMAGE_NAME && $VCONTAINER_RUNTIME_CMD images"
@@ -1474,6 +1797,7 @@ case "$COMMAND" in
         ;;
 
     load)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "load"
         # runtime load -i <file>
         # Parse -i argument
         INPUT_FILE=""
@@ -1508,6 +1832,7 @@ case "$COMMAND" in
         ;;
 
     import)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "import"
         # runtime import <tarball> [name:tag] - matches Docker/Podman's import exactly
         # Only accepts tarballs (rootfs archives), not OCI directories
         if [ ${#COMMAND_ARGS[@]} -lt 1 ]; then
@@ -1536,6 +1861,7 @@ case "$COMMAND" in
         ;;
 
     vimport)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "vimport"
         # Extended import: handles OCI directories, tarballs, and plain directories
         # Auto-detects format
         if [ ${#COMMAND_ARGS[@]} -lt 1 ]; then
@@ -1559,11 +1885,11 @@ case "$COMMAND" in
 
                 # Check for multi-architecture OCI Image Index
                 if is_oci_image_index "$INPUT_PATH"; then
-                    local available_platforms=$(get_oci_platforms "$INPUT_PATH")
+                    available_platforms=$(get_oci_platforms "$INPUT_PATH")
                     [ "$VERBOSE" = "true" ] && echo -e "${CYAN}[$VCONTAINER_RUNTIME_NAME]${NC} Multi-arch OCI detected. Available: $available_platforms" >&2
 
                     # Select manifest for target architecture
-                    local manifest_digest=$(select_platform_manifest "$INPUT_PATH" "$TARGET_ARCH")
+                    manifest_digest=$(select_platform_manifest "$INPUT_PATH" "$TARGET_ARCH")
                     if [ -z "$manifest_digest" ]; then
                         echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} Architecture $TARGET_ARCH not found in multi-arch image" >&2
                         echo -e "${YELLOW}[$VCONTAINER_RUNTIME_NAME]${NC} Available platforms: $available_platforms" >&2
@@ -1571,7 +1897,7 @@ case "$COMMAND" in
                         exit 1
                     fi
 
-                    echo -e "${GREEN}[$VCONTAINER_RUNTIME_NAME]${NC} Selected platform: $OCI_SELECTED_PLATFORM (from multi-arch image)" >&2
+                    echo -e "${GREEN}[$VCONTAINER_RUNTIME_NAME]${NC} Selected platform: $(normalize_arch_to_oci "$TARGET_ARCH")/linux (from multi-arch image)" >&2
 
                     # Extract single-platform OCI to temp directory
                     TEMP_OCI_DIR=$(mktemp -d)
@@ -1629,6 +1955,7 @@ case "$COMMAND" in
         ;;
 
     save)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "save"
         # runtime save -o <file> <image>
         OUTPUT_FILE=""
         IMAGE_NAME=""
@@ -1685,12 +2012,62 @@ case "$COMMAND" in
         ;;
 
     tag|rmi)
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            case "$COMMAND" in
+                rmi)
+                    [ ${#COMMAND_ARGS[@]} -lt 1 ] && { echo "rmi requires <image>" >&2; exit 1; }
+                    IMAGE_NAME="${COMMAND_ARGS[0]}"
+                    _vxn_normalized=$(vxn_normalize_image_name "$IMAGE_NAME")
+                    _vxn_ref_key=$(vxn_image_ref_key "$_vxn_normalized")
+                    _vxn_ref_link="$VXN_IMAGE_CACHE/refs/$_vxn_ref_key"
+                    if [ -L "$_vxn_ref_link" ]; then
+                        _vxn_store_dir=$(readlink -f "$_vxn_ref_link")
+                        rm -f "$_vxn_ref_link"
+                        # Remove store dir if no other refs point to it
+                        _vxn_other_refs=$(find "$VXN_IMAGE_CACHE/refs" -lname "*/$(basename "$_vxn_store_dir")" 2>/dev/null | wc -l)
+                        [ "$_vxn_other_refs" -eq 0 ] && rm -rf "$_vxn_store_dir"
+                        echo "Removed: $_vxn_normalized"
+                    else
+                        echo "Image not found: $_vxn_normalized" >&2; exit 1
+                    fi
+                    exit 0
+                    ;;
+                tag)
+                    [ ${#COMMAND_ARGS[@]} -lt 2 ] && { echo "tag requires <source> <target>" >&2; exit 1; }
+                    _vxn_src_oci=$(vxn_image_cache_lookup "${COMMAND_ARGS[0]}")
+                    if [ -z "$_vxn_src_oci" ]; then
+                        echo "Image not found: ${COMMAND_ARGS[0]}" >&2; exit 1
+                    fi
+                    _vxn_target_normalized=$(vxn_normalize_image_name "${COMMAND_ARGS[1]}")
+                    _vxn_target_ref_key=$(vxn_image_ref_key "$_vxn_target_normalized")
+                    mkdir -p "$VXN_IMAGE_CACHE/refs"
+                    _vxn_store_base=$(basename "$_vxn_src_oci")
+                    ln -sfn "../store/sha256/$_vxn_store_base" "$VXN_IMAGE_CACHE/refs/$_vxn_target_ref_key"
+                    echo "Tagged: $_vxn_target_normalized"
+                    exit 0
+                    ;;
+            esac
+        fi
         # Commands that work with existing images
         run_runtime_command "$VCONTAINER_RUNTIME_CMD $COMMAND ${COMMAND_ARGS[*]}"
         ;;
 
     # Container lifecycle commands
     ps)
+        # Xen: list per-container DomUs
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            printf "%-15s %-25s %-15s %-20s\n" "NAME" "IMAGE" "STATUS" "STARTED"
+            for cdir in "$HOME/.vxn/containers"/*/; do
+                [ -d "$cdir" ] || continue
+                name=$(basename "$cdir")
+                ctr_image=$(grep '^IMAGE=' "$cdir/container.meta" 2>/dev/null | cut -d= -f2-)
+                ctr_started=$(grep '^STARTED=' "$cdir/container.meta" 2>/dev/null | cut -d= -f2-)
+                status=$(vxn_container_status "$name")
+                printf "%-15s %-25s %-15s %-20s\n" "$name" "${ctr_image:-unknown}" "$status" "${ctr_started:-unknown}"
+            done
+            exit 0
+        fi
+
         # List containers and show port forwards if daemon is running
         run_runtime_command "$VCONTAINER_RUNTIME_CMD ps ${COMMAND_ARGS[*]}"
         PS_EXIT=$?
@@ -1719,6 +2096,24 @@ case "$COMMAND" in
         ;;
 
     rm)
+        # Xen: remove per-container DomU state
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            for arg in "${COMMAND_ARGS[@]}"; do
+                case "$arg" in -*) continue ;; esac
+                cdir="$(vxn_container_dir "$arg")"
+                if [ -d "$cdir" ]; then
+                    # Stop if still running
+                    if vxn_container_is_running "$arg"; then
+                        RUNNER_ARGS=$(build_runner_args)
+                        "$RUNNER" $RUNNER_ARGS --daemon-socket-dir "$cdir" --state-dir "$cdir" --daemon-stop 2>/dev/null
+                    fi
+                    rm -rf "$cdir"
+                    echo "$arg"
+                fi
+            done
+            exit 0
+        fi
+
         # Remove containers and cleanup any registered port forwards
         for arg in "${COMMAND_ARGS[@]}"; do
             # Skip flags like -f, --force, etc.
@@ -1734,21 +2129,61 @@ case "$COMMAND" in
         ;;
 
     logs)
+        # Xen: retrieve entrypoint log from DomU
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            if [ ${#COMMAND_ARGS[@]} -lt 1 ]; then
+                echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} logs requires <container>" >&2
+                exit 1
+            fi
+            cname="${COMMAND_ARGS[0]}"
+            cdir="$(vxn_container_dir "$cname")"
+            if [ -d "$cdir" ] && vxn_container_is_running "$cname"; then
+                RUNNER_ARGS=$(build_runner_args)
+                "$RUNNER" $RUNNER_ARGS --daemon-socket-dir "$cdir" --state-dir "$cdir" --daemon-send -- "cat /tmp/entrypoint.log 2>/dev/null"
+                exit $?
+            fi
+            echo "Container $cname not running" >&2
+            exit 1
+        fi
+
         # View container logs
         run_runtime_command "$VCONTAINER_RUNTIME_CMD logs ${COMMAND_ARGS[*]}"
         ;;
 
     inspect)
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            [ ${#COMMAND_ARGS[@]} -lt 1 ] && { echo "inspect requires <image>" >&2; exit 1; }
+            _vxn_cached_oci=$(vxn_image_cache_lookup "${COMMAND_ARGS[0]}")
+            if [ -n "$_vxn_cached_oci" ]; then
+                vxn_image_cache_inspect "$_vxn_cached_oci"
+                exit 0
+            fi
+            # Not in image cache — could be a container name on Xen
+            echo "Not found: ${COMMAND_ARGS[0]}" >&2
+            exit 1
+        fi
         # Inspect container or image
         run_runtime_command "$VCONTAINER_RUNTIME_CMD inspect ${COMMAND_ARGS[*]}"
         ;;
 
     start|restart|kill|pause|unpause)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "$COMMAND"
         # Container state commands (no special handling needed)
         run_runtime_command "$VCONTAINER_RUNTIME_CMD $COMMAND ${COMMAND_ARGS[*]}"
         ;;
 
     stop)
+        # Xen: stop per-container DomU
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && [ -n "${COMMAND_ARGS[0]:-}" ]; then
+            cname="${COMMAND_ARGS[0]}"
+            cdir="$(vxn_container_dir "$cname")"
+            if [ -d "$cdir" ]; then
+                RUNNER_ARGS=$(build_runner_args)
+                "$RUNNER" $RUNNER_ARGS --daemon-socket-dir "$cdir" --state-dir "$cdir" --daemon-stop
+                exit $?
+            fi
+        fi
+
         # Stop container and cleanup any registered port forwards
         if [ ${#COMMAND_ARGS[@]} -ge 1 ]; then
             STOP_CONTAINER_NAME="${COMMAND_ARGS[0]}"
@@ -1762,33 +2197,44 @@ case "$COMMAND" in
 
     # Image commands
     commit)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "commit"
         # Commit container to image
         run_runtime_command "$VCONTAINER_RUNTIME_CMD commit ${COMMAND_ARGS[*]}"
         ;;
 
     history)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "history"
         # Show image history
         run_runtime_command "$VCONTAINER_RUNTIME_CMD history ${COMMAND_ARGS[*]}"
         ;;
 
     # Registry commands
     push)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "push"
         # Push image to registry
         run_runtime_command "$VCONTAINER_RUNTIME_CMD push ${COMMAND_ARGS[*]}"
         ;;
 
     search)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "search"
         # Search registries
         run_runtime_command "$VCONTAINER_RUNTIME_CMD search ${COMMAND_ARGS[*]}"
         ;;
 
     login)
-        # Login to registry - may need credentials via stdin
-        # For non-interactive: runtime login -u user -p pass registry
-        run_runtime_command "$VCONTAINER_RUNTIME_CMD login ${COMMAND_ARGS[*]}"
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "login"
+        # Login needs interactive stdin for password prompt.
+        # Use daemon-interactive mode (same as vshell/exec -it).
+        if daemon_is_running; then
+            RUNNER_ARGS=$(build_runner_args)
+            "$RUNNER" $RUNNER_ARGS --daemon-interactive -- "$VCONTAINER_RUNTIME_CMD login ${COMMAND_ARGS[*]}"
+        else
+            run_runtime_command "$VCONTAINER_RUNTIME_CMD login ${COMMAND_ARGS[*]}"
+        fi
         ;;
 
     logout)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "logout"
         # Logout from registry
         run_runtime_command "$VCONTAINER_RUNTIME_CMD logout ${COMMAND_ARGS[*]}"
         ;;
@@ -1797,6 +2243,21 @@ case "$COMMAND" in
     exec)
         if [ ${#COMMAND_ARGS[@]} -lt 2 ]; then
             echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} exec requires <container> <command>" >&2
+            exit 1
+        fi
+
+        # Xen: exec in per-container DomU
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            cname="${COMMAND_ARGS[0]}"
+            cdir="$(vxn_container_dir "$cname")"
+            if [ -d "$cdir" ] && vxn_container_is_running "$cname"; then
+                shift_args=("${COMMAND_ARGS[@]:1}")
+                exec_cmd="${shift_args[*]}"
+                RUNNER_ARGS=$(build_runner_args)
+                "$RUNNER" $RUNNER_ARGS --daemon-socket-dir "$cdir" --state-dir "$cdir" --daemon-send -- "$exec_cmd"
+                exit $?
+            fi
+            echo "Container $cname not running" >&2
             exit 1
         fi
 
@@ -1839,6 +2300,7 @@ case "$COMMAND" in
 
     # VM shell - interactive shell into the VM itself (not a container)
     vshell)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "vshell"
         # Opens a shell directly in the vdkr/vpdmn VM for debugging
         # This runs /bin/sh in the VM, not inside a container
         # Useful for:
@@ -1858,6 +2320,7 @@ case "$COMMAND" in
 
     # Runtime cp - copy files to/from container
     cp)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "cp"
         if [ ${#COMMAND_ARGS[@]} -lt 2 ]; then
             echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} cp requires <src> <dest>" >&2
             echo "Usage: $VCONTAINER_RUNTIME_NAME cp <container>:<path> <local_path>" >&2
@@ -2025,14 +2488,17 @@ case "$COMMAND" in
         ;;
 
     info)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "info"
         run_runtime_command "$VCONTAINER_RUNTIME_CMD info"
         ;;
 
     version)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "version"
         run_runtime_command "$VCONTAINER_RUNTIME_CMD version"
         ;;
 
     system)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "system"
         # Passthrough to runtime system commands (df, prune, events, etc.)
         if [ ${#COMMAND_ARGS[@]} -lt 1 ]; then
             echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} system requires a subcommand: df, prune, events, info" >&2
@@ -2049,12 +2515,20 @@ case "$COMMAND" in
             STORAGE_CMD="${COMMAND_ARGS[0]}"
         fi
 
+        # When --state-dir is passed, scan its parent as the storage root
+        # (STATE_DIR is an arch subdir like ~/.vpdmn-test/x86_64, so the
+        # parent ~/.vpdmn-test/ is the root containing all arch dirs).
+        VSTORAGE_ROOT="$DEFAULT_STATE_DIR"
+        if [ -n "$STATE_DIR" ]; then
+            VSTORAGE_ROOT="$(dirname "$STATE_DIR")"
+        fi
+
         case "$STORAGE_CMD" in
             list)
                 echo "$VCONTAINER_RUNTIME_NAME storage directories:"
                 echo ""
                 found=0
-                for state_dir in "$DEFAULT_STATE_DIR"/*/; do
+                for state_dir in "$VSTORAGE_ROOT"/*/; do
                     [ -d "$state_dir" ] || continue
                     found=1
                     instance=$(basename "$state_dir")
@@ -2083,8 +2557,8 @@ case "$COMMAND" in
                 fi
 
                 # Total size
-                if [ -d "$DEFAULT_STATE_DIR" ] && [ $found -gt 0 ]; then
-                    total=$(du -sh "$DEFAULT_STATE_DIR" 2>/dev/null | cut -f1)
+                if [ -d "$VSTORAGE_ROOT" ] && [ $found -gt 0 ]; then
+                    total=$(du -sh "$VSTORAGE_ROOT" 2>/dev/null | cut -f1)
                     echo "Total: $total"
                 fi
                 ;;
@@ -2097,7 +2571,7 @@ case "$COMMAND" in
 
             df)
                 # Detailed breakdown
-                for state_dir in "$DEFAULT_STATE_DIR"/*/; do
+                for state_dir in "$VSTORAGE_ROOT"/*/; do
                     [ -d "$state_dir" ] || continue
                     instance=$(basename "$state_dir")
                     echo "${BOLD}$instance${NC}:"
@@ -2118,7 +2592,7 @@ case "$COMMAND" in
                 arch="${COMMAND_ARGS[1]:-}"
                 if [ "$arch" = "--all" ]; then
                     # Stop any running memres first
-                    for pid_file in "$DEFAULT_STATE_DIR"/*/daemon.pid; do
+                    for pid_file in "$VSTORAGE_ROOT"/*/daemon.pid; do
                         [ -f "$pid_file" ] || continue
                         pid=$(cat "$pid_file" 2>/dev/null)
                         if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
@@ -2127,11 +2601,11 @@ case "$COMMAND" in
                         fi
                     done
                     echo -e "${YELLOW}[$VCONTAINER_RUNTIME_NAME]${NC} Removing all storage directories..."
-                    rm -rf "$DEFAULT_STATE_DIR"
+                    rm -rf "$VSTORAGE_ROOT"
                     echo -e "${GREEN}[$VCONTAINER_RUNTIME_NAME]${NC} All storage cleaned."
                 elif [ -n "$arch" ]; then
                     # Clean specific arch
-                    clean_dir="$DEFAULT_STATE_DIR/$arch"
+                    clean_dir="$VSTORAGE_ROOT/$arch"
                     if [ -d "$clean_dir" ]; then
                         # Stop memres if running
                         if [ -f "$clean_dir/daemon.pid" ]; then
@@ -2181,6 +2655,7 @@ case "$COMMAND" in
         ;;
 
     vrun)
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && vxn_unsupported "vrun"
         # Extended run: run a command in a container (runtime-like syntax)
         # Usage: <tool> vrun [options] <image> [command] [args...]
         # Options:
@@ -2389,6 +2864,13 @@ case "$COMMAND" in
             exit 1
         fi
 
+        # vxn (Xen): ephemeral mode by default.
+        # Detached mode (-d) uses per-container DomU with daemon loop instead.
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+            # Detached flag is parsed below; defer NO_DAEMON until after flag parsing
+            :
+        fi
+
         # Check if any volume mounts, network, port forwards, or detach are present
         RUN_HAS_VOLUMES=false
         RUN_HAS_NETWORK=false
@@ -2431,6 +2913,15 @@ case "$COMMAND" in
             i=$((i + 1))
         done
 
+        # Xen: non-detached runs use ephemeral mode unless memres is running
+        if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && [ "$RUN_IS_DETACHED" != "true" ]; then
+            if daemon_is_running; then
+                NO_DAEMON=false
+            else
+                NO_DAEMON=true
+            fi
+        fi
+
         # Volume mounts require daemon mode
         if [ "$RUN_HAS_VOLUMES" = "true" ] && ! daemon_is_running; then
             echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} Volume mounts require daemon mode. Start with: $VCONTAINER_RUNTIME_NAME memres start" >&2
@@ -2469,7 +2960,7 @@ case "$COMMAND" in
         if [ "$INTERACTIVE" = "true" ]; then
             # Interactive mode with volumes still needs to stop daemon (volumes use share dir)
             # Interactive mode without volumes can use daemon_interactive (faster)
-            if [ "$RUN_HAS_VOLUMES" = "false" ] && daemon_is_running; then
+            if [ "$NO_DAEMON" != "true" ] && [ "$RUN_HAS_VOLUMES" = "false" ] && daemon_is_running; then
                 # Use daemon interactive mode - keeps daemon running
                 [ "$VERBOSE" = "true" ] && echo -e "${CYAN}[$VCONTAINER_RUNTIME_NAME]${NC} Using daemon interactive mode" >&2
                 RUNNER_ARGS=$(build_runner_args)
@@ -2504,6 +2995,66 @@ case "$COMMAND" in
             fi
         else
             # Non-interactive - use daemon mode when available
+
+            # Xen detached mode: per-container DomU with daemon loop
+            if [ "$RUN_IS_DETACHED" = "true" ] && [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+                # Generate name if not provided
+                [ -z "$RUN_CONTAINER_NAME" ] && RUN_CONTAINER_NAME="$(cat /proc/sys/kernel/random/uuid | cut -c1-8)"
+
+                # Per-container state dir
+                VXN_CTR_DIR="$HOME/.vxn/containers/$RUN_CONTAINER_NAME"
+                mkdir -p "$VXN_CTR_DIR"
+
+                # Build runner args with per-container state/socket dir
+                RUNNER_ARGS=$(build_runner_args)
+                RUNNER_ARGS="$RUNNER_ARGS --daemon-socket-dir $VXN_CTR_DIR --state-dir $VXN_CTR_DIR"
+                RUNNER_ARGS="$RUNNER_ARGS --container-name $RUN_CONTAINER_NAME"
+
+                # Start per-container DomU (daemon mode + initial command)
+                "$RUNNER" $RUNNER_ARGS --daemon-start -- "$RUNTIME_CMD"
+
+                if [ $? -eq 0 ]; then
+                    # Save metadata — extract image name (last positional arg before any cmd)
+                    local_image=""
+                    local_found_image=false
+                    local_skip_next=false
+                    for arg in "${COMMAND_ARGS[@]}"; do
+                        if [ "$local_skip_next" = "true" ]; then
+                            local_skip_next=false
+                            continue
+                        fi
+                        case "$arg" in
+                            --rm|--detach|-d|-i|--interactive|-t|--tty|--privileged|-it) ;;
+                            -p|--publish|-v|--volume|-e|--env|--name|--network|-w|--workdir|--entrypoint|-m|--memory|--cpus)
+                                local_skip_next=true ;;
+                            --publish=*|--volume=*|--env=*|--name=*|--network=*|--workdir=*|--entrypoint=*|--memory=*|--cpus=*) ;;
+                            -*)  ;;
+                            *)
+                                if [ "$local_found_image" = "false" ]; then
+                                    local_image="$arg"
+                                    local_found_image=true
+                                fi
+                                ;;
+                        esac
+                    done
+                    echo "IMAGE=${local_image}" > "$VXN_CTR_DIR/container.meta"
+                    echo "COMMAND=$RUNTIME_CMD" >> "$VXN_CTR_DIR/container.meta"
+                    echo "STARTED=$(date -Iseconds)" >> "$VXN_CTR_DIR/container.meta"
+                    echo "$RUN_CONTAINER_NAME"
+                else
+                    rm -rf "$VXN_CTR_DIR"
+                    exit 1
+                fi
+                exit 0
+            fi
+
+            # Xen memres mode: dispatch container to persistent DomU
+            if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] && [ "$NO_DAEMON" != "true" ] && daemon_is_running; then
+                [ "$VERBOSE" = "true" ] && echo -e "${CYAN}[$VCONTAINER_RUNTIME_NAME]${NC} Using memres DomU" >&2
+                RUNNER_ARGS=$(build_runner_args)
+                "$RUNNER" $RUNNER_ARGS --daemon-run -- "$RUNTIME_CMD"
+                exit $?
+            fi
 
             # For detached containers with port forwards, add them dynamically via QMP
             if [ "$RUN_IS_DETACHED" = "true" ] && [ "$RUN_HAS_PORT_FORWARDS" = "true" ] && daemon_is_running; then
@@ -2676,71 +3227,144 @@ case "$COMMAND" in
                 echo ""
                 found=0
                 tracked_pids=""
-                for pid_file in "$DEFAULT_STATE_DIR"/*/daemon.pid; do
-                    [ -f "$pid_file" ] || continue
-                    pid=$(cat "$pid_file" 2>/dev/null)
-                    if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
-                        instance_dir=$(dirname "$pid_file")
-                        instance_name=$(basename "$instance_dir")
-                        echo "  ${CYAN}$instance_name${NC}"
-                        echo "    PID: $pid"
-                        echo "    State: $instance_dir"
-                        if [ -f "$instance_dir/qemu.log" ]; then
-                            # Try to extract port forwards from qemu command line
-                            ports=$(grep -o 'hostfwd=[^,]*' "$instance_dir/qemu.log" 2>/dev/null | sed 's/hostfwd=tcp:://g; s/-/:/' | tr '\n' ' ')
-                            [ -n "$ports" ] && echo "    Ports: $ports"
-                        fi
-                        echo ""
-                        found=$((found + 1))
-                        tracked_pids="$tracked_pids $pid"
-                    fi
-                done
-                if [ $found -eq 0 ]; then
-                    echo "  (none)"
-                fi
 
-                # Check for zombie/orphan QEMU processes (vdkr or vpdmn)
-                echo ""
-                echo "Checking for orphan QEMU processes..."
-                zombies=""
-                for qemu_pid in $(pgrep -f "qemu-system.*runtime=(docker|podman)" 2>/dev/null || true); do
-                    # Skip if this PID is already tracked
-                    if echo "$tracked_pids" | grep -qw "$qemu_pid"; then
-                        continue
-                    fi
-                    # Also check other tool's state dirs
-                    other_tracked=false
-                    for vpid_file in "$OTHER_STATE_DIR"/*/daemon.pid; do
-                        [ -f "$vpid_file" ] || continue
-                        vpid=$(cat "$vpid_file" 2>/dev/null)
-                        if [ "$vpid" = "$qemu_pid" ]; then
-                            other_tracked=true
-                            break
+                # Xen: check for vxn domains via xl list
+                if [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ]; then
+                    for domname_file in "$DEFAULT_STATE_DIR"/*/daemon.domname; do
+                        [ -f "$domname_file" ] || continue
+                        domname=$(cat "$domname_file" 2>/dev/null)
+                        if [ -n "$domname" ] && xl list "$domname" >/dev/null 2>&1; then
+                            instance_dir=$(dirname "$domname_file")
+                            instance_name=$(basename "$instance_dir")
+                            echo "  ${CYAN}$instance_name${NC}"
+                            echo "    Domain: $domname"
+                            echo "    State: $instance_dir"
+                            if [ -f "$instance_dir/daemon.pty" ]; then
+                                echo "    PTY: $(cat "$instance_dir/daemon.pty")"
+                            fi
+                            echo ""
+                            found=$((found + 1))
                         fi
                     done
-                    if [ "$other_tracked" = "true" ]; then
-                        continue
-                    fi
-                    zombies="$zombies $qemu_pid"
-                done
 
-                if [ -n "$zombies" ]; then
+                    # Also check per-container DomUs
+                    if [ -d "$HOME/.vxn/containers" ]; then
+                        for meta_file in "$HOME/.vxn/containers"/*/container.meta; do
+                            [ -f "$meta_file" ] || continue
+                            ctr_dir=$(dirname "$meta_file")
+                            ctr_name=$(basename "$ctr_dir")
+                            if vxn_container_is_running "$ctr_name"; then
+                                image=$(grep '^IMAGE=' "$meta_file" 2>/dev/null | cut -d= -f2)
+                                started=$(grep '^STARTED=' "$meta_file" 2>/dev/null | cut -d= -f2)
+                                echo "  ${CYAN}$ctr_name${NC} (per-container DomU)"
+                                echo "    Image: ${image:-(unknown)}"
+                                echo "    Started: ${started:-(unknown)}"
+                                echo "    State: $ctr_dir"
+                                echo ""
+                                found=$((found + 1))
+                            fi
+                        done
+                    fi
+
+                    if [ $found -eq 0 ]; then
+                        echo "  (none)"
+                    fi
+
+                    # Check for orphan vxn domains
                     echo ""
-                    echo -e "${YELLOW}Orphan QEMU processes found:${NC}"
-                    for zpid in $zombies; do
-                        # Extract runtime from cmdline
-                        cmdline=$(cat /proc/$zpid/cmdline 2>/dev/null | tr '\0' ' ')
-                        runtime=$(echo "$cmdline" | grep -o 'runtime=[a-z]*' | cut -d= -f2)
-                        state_dir=$(echo "$cmdline" | grep -o 'path=[^,]*daemon.sock' | sed 's|path=||; s|/daemon.sock||')
-                        echo ""
-                        echo "  ${RED}PID $zpid${NC} (${runtime:-unknown})"
-                        [ -n "$state_dir" ] && echo "    State: $state_dir"
-                        echo "    Kill with: kill $zpid"
+                    echo "Checking for orphan Xen domains..."
+                    orphans=""
+                    for domname in $(xl list 2>/dev/null | awk '/^vxn-/{print $1}'); do
+                        tracked=false
+                        for df in "$DEFAULT_STATE_DIR"/*/daemon.domname "$HOME"/.vxn/containers/*/daemon.domname; do
+                            [ -f "$df" ] || continue
+                            if [ "$(cat "$df" 2>/dev/null)" = "$domname" ]; then
+                                tracked=true
+                                break
+                            fi
+                        done
+                        if [ "$tracked" != "true" ]; then
+                            orphans="$orphans $domname"
+                        fi
                     done
-                    echo ""
-                    echo -e "To kill all orphans: ${CYAN}kill$zombies${NC}"
+
+                    if [ -n "$orphans" ]; then
+                        echo -e "${YELLOW}Orphan vxn domains found:${NC}"
+                        for odom in $orphans; do
+                            echo "  ${RED}$odom${NC}"
+                            echo "    Destroy with: xl destroy $odom"
+                        done
+                    else
+                        echo "  (no orphans found)"
+                    fi
                 else
-                    echo "  (no orphans found)"
+                    # QEMU: check PID files
+                    for pid_file in "$DEFAULT_STATE_DIR"/*/daemon.pid; do
+                        [ -f "$pid_file" ] || continue
+                        pid=$(cat "$pid_file" 2>/dev/null)
+                        if [ -n "$pid" ] && [ -d "/proc/$pid" ]; then
+                            instance_dir=$(dirname "$pid_file")
+                            instance_name=$(basename "$instance_dir")
+                            echo "  ${CYAN}$instance_name${NC}"
+                            echo "    PID: $pid"
+                            echo "    State: $instance_dir"
+                            if [ -f "$instance_dir/qemu.log" ]; then
+                                # Try to extract port forwards from qemu command line
+                                ports=$(grep -o 'hostfwd=[^,]*' "$instance_dir/qemu.log" 2>/dev/null | sed 's/hostfwd=tcp:://g; s/-/:/' | tr '\n' ' ')
+                                [ -n "$ports" ] && echo "    Ports: $ports"
+                            fi
+                            echo ""
+                            found=$((found + 1))
+                            tracked_pids="$tracked_pids $pid"
+                        fi
+                    done
+                    if [ $found -eq 0 ]; then
+                        echo "  (none)"
+                    fi
+
+                    # Check for zombie/orphan QEMU processes (vdkr or vpdmn)
+                    echo ""
+                    echo "Checking for orphan QEMU processes..."
+                    zombies=""
+                    for qemu_pid in $(pgrep -f "qemu-system.*runtime=(docker|podman)" 2>/dev/null || true); do
+                        # Skip if this PID is already tracked
+                        if echo "$tracked_pids" | grep -qw "$qemu_pid"; then
+                            continue
+                        fi
+                        # Also check other tool's state dirs
+                        other_tracked=false
+                        for vpid_file in "$OTHER_STATE_DIR"/*/daemon.pid; do
+                            [ -f "$vpid_file" ] || continue
+                            vpid=$(cat "$vpid_file" 2>/dev/null)
+                            if [ "$vpid" = "$qemu_pid" ]; then
+                                other_tracked=true
+                                break
+                            fi
+                        done
+                        if [ "$other_tracked" = "true" ]; then
+                            continue
+                        fi
+                        zombies="$zombies $qemu_pid"
+                    done
+
+                    if [ -n "$zombies" ]; then
+                        echo ""
+                        echo -e "${YELLOW}Orphan QEMU processes found:${NC}"
+                        for zpid in $zombies; do
+                            # Extract runtime from cmdline
+                            cmdline=$(cat /proc/$zpid/cmdline 2>/dev/null | tr '\0' ' ')
+                            runtime=$(echo "$cmdline" | grep -o 'runtime=[a-z]*' | cut -d= -f2)
+                            state_dir=$(echo "$cmdline" | grep -o 'path=[^,]*daemon.sock' | sed 's|path=||; s|/daemon.sock||')
+                            echo ""
+                            echo "  ${RED}PID $zpid${NC} (${runtime:-unknown})"
+                            [ -n "$state_dir" ] && echo "    State: $state_dir"
+                            echo "    Kill with: kill $zpid"
+                        done
+                        echo ""
+                        echo -e "To kill all orphans: ${CYAN}kill$zombies${NC}"
+                    else
+                        echo "  (no orphans found)"
+                    fi
                 fi
                 ;;
             clean-ports)
@@ -2760,6 +3384,123 @@ case "$COMMAND" in
                 exit 1
                 ;;
         esac
+        ;;
+
+    bundle)
+        # Create an OCI runtime bundle from a container image.
+        # Usage: <tool> bundle <image> <output-dir> [-- <cmd> ...]
+        #
+        # Pulls the image via skopeo, extracts layers into rootfs/,
+        # and generates config.json from the OCI image config.
+        # Optional command after -- overrides the image's default entrypoint.
+        # The resulting bundle can be passed to vxn-oci-runtime create --bundle.
+        [ "${VCONTAINER_HYPERVISOR:-}" = "xen" ] || {
+            echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} bundle is only supported for Xen (vxn)" >&2
+            exit 1
+        }
+
+        if [ ${#COMMAND_ARGS[@]} -lt 2 ]; then
+            echo "Usage: $VCONTAINER_RUNTIME_NAME bundle <image> <output-dir> [-- <cmd> ...]" >&2
+            echo "" >&2
+            echo "Creates an OCI runtime bundle from a container image." >&2
+            echo "The bundle can then be used with vxn-oci-runtime:" >&2
+            echo "" >&2
+            echo "  $VCONTAINER_RUNTIME_NAME bundle alpine /tmp/test-bundle -- /bin/echo hello" >&2
+            echo "  vxn-oci-runtime create --bundle /tmp/test-bundle --pid-file /tmp/t.pid test1" >&2
+            echo "  vxn-oci-runtime start test1" >&2
+            echo "  vxn-oci-runtime state test1" >&2
+            echo "  vxn-oci-runtime delete test1" >&2
+            exit 1
+        fi
+
+        BUNDLE_IMAGE="${COMMAND_ARGS[0]}"
+        BUNDLE_DIR="${COMMAND_ARGS[1]}"
+
+        # Parse optional command override after --
+        BUNDLE_CMD_OVERRIDE=()
+        _bundle_found_sep=false
+        for _ba in "${COMMAND_ARGS[@]:2}"; do
+            if [ "$_bundle_found_sep" = "true" ]; then
+                BUNDLE_CMD_OVERRIDE+=("$_ba")
+            elif [ "$_ba" = "--" ]; then
+                _bundle_found_sep=true
+            fi
+        done
+
+        # Check prerequisites
+        command -v skopeo >/dev/null 2>&1 || {
+            echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} skopeo not found (needed for image pull)" >&2
+            exit 1
+        }
+        command -v jq >/dev/null 2>&1 || {
+            echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} jq not found (needed for OCI config parsing)" >&2
+            exit 1
+        }
+
+        # Pull image via skopeo
+        BUNDLE_TMP=$(mktemp -d)
+        trap 'rm -rf "$BUNDLE_TMP"' EXIT
+        BUNDLE_OCI="$BUNDLE_TMP/oci"
+
+        echo -e "${CYAN}[$VCONTAINER_RUNTIME_NAME]${NC} Pulling $BUNDLE_IMAGE..."
+        if ! skopeo copy "docker://$BUNDLE_IMAGE" "oci:$BUNDLE_OCI:latest" 2>&1; then
+            echo -e "${RED}[$VCONTAINER_RUNTIME_NAME]${NC} Failed to pull image: $BUNDLE_IMAGE" >&2
+            exit 1
+        fi
+
+        # Extract layers into rootfs/
+        mkdir -p "$BUNDLE_DIR/rootfs"
+
+        BUNDLE_MANIFEST_DIGEST=$(jq -r '.manifests[0].digest' "$BUNDLE_OCI/index.json")
+        BUNDLE_MANIFEST="$BUNDLE_OCI/blobs/${BUNDLE_MANIFEST_DIGEST/://}"
+        BUNDLE_CONFIG_DIGEST=$(jq -r '.config.digest' "$BUNDLE_MANIFEST")
+        BUNDLE_CONFIG="$BUNDLE_OCI/blobs/${BUNDLE_CONFIG_DIGEST/://}"
+
+        echo -e "${CYAN}[$VCONTAINER_RUNTIME_NAME]${NC} Extracting layers..."
+        for layer_digest in $(jq -r '.layers[].digest' "$BUNDLE_MANIFEST"); do
+            layer_file="$BUNDLE_OCI/blobs/${layer_digest/://}"
+            [ -f "$layer_file" ] && tar -xf "$layer_file" -C "$BUNDLE_DIR/rootfs" 2>/dev/null || true
+        done
+
+        # Parse OCI config
+        BUNDLE_ENTRYPOINT=$(jq -r '(.config.Entrypoint // [])' "$BUNDLE_CONFIG")
+        BUNDLE_CMD=$(jq -r '(.config.Cmd // [])' "$BUNDLE_CONFIG")
+        BUNDLE_ENV=$(jq -r '(.config.Env // [])' "$BUNDLE_CONFIG")
+        BUNDLE_CWD=$(jq -r '.config.WorkingDir // "/"' "$BUNDLE_CONFIG")
+        [ -z "$BUNDLE_CWD" ] && BUNDLE_CWD="/"
+
+        # Merge Entrypoint + Cmd into process.args (or use override)
+        if [ ${#BUNDLE_CMD_OVERRIDE[@]} -gt 0 ]; then
+            BUNDLE_ARGS=$(printf '%s\n' "${BUNDLE_CMD_OVERRIDE[@]}" | jq -R . | jq -s .)
+        else
+            BUNDLE_ARGS=$(jq -n \
+                --argjson ep "$BUNDLE_ENTRYPOINT" \
+                --argjson cmd "$BUNDLE_CMD" \
+                '$ep + $cmd')
+        fi
+
+        # Generate config.json
+        jq -n \
+            --argjson args "$BUNDLE_ARGS" \
+            --argjson env "$BUNDLE_ENV" \
+            --arg cwd "$BUNDLE_CWD" \
+        '{
+            ociVersion: "1.0.2",
+            process: {
+                args: $args,
+                env: $env,
+                cwd: $cwd
+            },
+            root: { path: "rootfs" }
+        }' > "$BUNDLE_DIR/config.json"
+
+        rm -rf "$BUNDLE_TMP"
+        trap - EXIT
+
+        BUNDLE_ARGS_DISPLAY=$(jq -r 'join(" ")' <<< "$BUNDLE_ARGS")
+        echo -e "${GREEN}[$VCONTAINER_RUNTIME_NAME]${NC} Bundle created: $BUNDLE_DIR"
+        echo -e "  entrypoint: $BUNDLE_ARGS_DISPLAY"
+        echo -e "  cwd: $BUNDLE_CWD"
         ;;
 
     *)

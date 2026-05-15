@@ -5,8 +5,8 @@ DESCRIPTION = "containerd is a daemon to control runC, built for performance and
                support as well as checkpoint and restore for cloning and live migration of containers."
 
 
-SRCREV = "a7e49900aa74c23f294fe050f88f2bbfcdaadd2a"
-SRC_URI = "git://github.com/containerd/containerd;branch=main;protocol=https;destsuffix=git/src/github.com/containerd/containerd/v2 \
+SRCREV = "5957d3334bcaeddc2bd8e665f53cee318c298a2c"
+SRC_URI = "git://github.com/containerd/containerd;branch=release/2.2;protocol=https;destsuffix=git/src/github.com/containerd/containerd/v2 \
            file://0001-Makefile-allow-GO_BUILD_FLAGS-to-be-externally-speci.patch \
            file://0001-build-don-t-use-gcflags-to-define-trimpath.patch \
            file://cni-containerd-net.conflist \
@@ -16,7 +16,7 @@ SRC_URI = "git://github.com/containerd/containerd;branch=main;protocol=https;des
 LICENSE = "Apache-2.0"
 LIC_FILES_CHKSUM = "file://LICENSE;md5=1269f40c0d099c21a871163984590d89"
 
-CONTAINERD_VERSION = "v2.2.0-beta.1"
+CONTAINERD_VERSION = "2.2.2"
 
 # EXTRA_OEMAKE += "GODEBUG=1"
 
@@ -105,3 +105,6 @@ RDEPENDS:${PN} += " ${VIRTUAL-RUNTIME_container_runtime}"
 ## configured in the distro, since we may have collisions.
 CNI_NETWORKING_FILES ?= "${UNPACKDIR}/cni-containerd-net.conflist"
 inherit cni_networking
+
+# Add CVE_PRODUCT to match the NVD CPE product name
+CVE_PRODUCT = "linuxfoundation:containerd"

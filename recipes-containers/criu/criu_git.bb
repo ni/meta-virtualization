@@ -13,8 +13,8 @@ EXCLUDE_FROM_WORLD = "1"
 
 LIC_FILES_CHKSUM = "file://COPYING;md5=412de458544c1cb6a2b512cd399286e2"
 
-SRCREV = "a44aa6d985472d995d04fef7eae22d63c7500f8c"
-PV = "4.1.1+git"
+SRCREV = "3c7d4fa013297b431da48eff821db7f2e8b90c27"
+PV = "4.2+git"
 
 SRC_URI = "git://github.com/checkpoint-restore/criu.git;branch=master;protocol=https \
            file://0001-criu-Skip-documentation-install.patch \
@@ -24,6 +24,7 @@ SRC_URI = "git://github.com/checkpoint-restore/criu.git;branch=master;protocol=h
            file://0005-pycriu-skip-dependency-check-during-build.patch \
            file://0001-crit-explicity-set-PEP517_SOURCE_PATH.patch \
            file://0001-plugins-cuda-pass-DEBUG_PREFIX_MAP.patch \
+           file://0006-images-Makefile-fix-cross-compilation-protobuf-paths.patch \
            "
 
 COMPATIBLE_HOST = "(x86_64|arm|aarch64).*-linux"
@@ -40,7 +41,7 @@ EXTRA_OEMAKE:arm += "ARCH=arm UNAME-M=${CRIU_BUILD_ARCH} WERROR=0"
 EXTRA_OEMAKE:x86-64 += "ARCH=x86 WERROR=0"
 EXTRA_OEMAKE:aarch64 += "ARCH=aarch64 WERROR=0"
 
-EXTRA_OEMAKE:append = " SBINDIR=${sbindir} LIBDIR=${libdir} INCLUDEDIR=${includedir} PIEGEN=no"
+EXTRA_OEMAKE:append = " SBINDIR=${sbindir} LIBDIR=${libdir} INCLUDEDIR=${includedir} PIEGEN=no PROTOBUF_INCLUDEDIR=${PKG_CONFIG_SYSROOT_DIR}/usr/include"
 EXTRA_OEMAKE:append = " LOGROTATEDIR=${sysconfdir} SYSTEMDUNITDIR=${systemd_unitdir}"
 
 CFLAGS += "-D__USE_GNU -D_GNU_SOURCE "
@@ -68,11 +69,6 @@ CLEANBROKEN = "1"
 
 # WARNING: criu-3.17.1 do_package_qa: QA Issue: criu: ELF binary /usr/sbin/criu has relocations in .text [textrel]
 INSANE_SKIP:${PN} += "textrel"
-
-do_compile:prepend() {
-    rm -rf ${S}/images/google/protobuf/descriptor.proto
-    ln -s  ${PKG_CONFIG_SYSROOT_DIR}/usr/include/google/protobuf/descriptor.proto ${S}/images/google/protobuf/descriptor.proto
-}
 
 do_compile () {
 	export DEBUG_PREFIX_MAP="${DEBUG_PREFIX_MAP}"
@@ -112,3 +108,5 @@ FILES:${PN}-staticdev += " \
             ${libexecdir}/compel/std.lib.a \
             ${libexecdir}/compel/fds.lib.a \
             "
+
+CVE_PRODUCT = "criu:checkpoint\/restore_in_userspace"

@@ -6,7 +6,7 @@
 # This is required for the fast batch-import path in container-cross-install.
 #
 # Note: Native recipes don't see target DISTRO_FEATURES directly.
-# The layer.conf propagates virtualization to DISTRO_FEATURES_NATIVE when
-# vcontainer or virtualization is in the target DISTRO_FEATURES.
+# The layer.conf propagates virtualization and vcontainer to DISTRO_FEATURES
+# using DISTRO_FEATURES_FILTER_NATIVE.
 
-PACKAGECONFIG:append = " ${@bb.utils.contains('DISTRO_FEATURES_NATIVE', 'virtualization', 'virtfs', '', d)}"
+PACKAGECONFIG:append = "${@bb.utils.contains_any('DISTRO_FEATURES', 'virtualization vcontainer', ' virtfs', '', d)}"

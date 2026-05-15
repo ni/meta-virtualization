@@ -3,10 +3,10 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 PRIORITY = "optional"
 
-SRCREV_crun = "64611d7ac938b8397e8a00a0e69987583fadec7d"
-SRCREV_libocispec = "552ccbbad3aaff8e07e8fbad210ec3b4c9c95a66"
-SRCREV_ispec = "6519a62d628ec31b5da156de745b516d8850c8e3"
-SRCREV_rspec = "5610abdb9fac3b48b2c0ba6216d77320cbbbfb6f"
+SRCREV_crun = "393509db566bedea037d1599c5a58b896f5d3b01"
+SRCREV_libocispec = "8b07b619df73a113f7721f1c7ce24f2572b04cea"
+SRCREV_ispec = "a4c6ade7bb82b316d45391f572727a63e268b252"
+SRCREV_rspec = "6f7b71c2d216403715f7364ac88dec88d9da989c"
 SRCREV_yajl = "f344d21280c3e4094919fd318bc5ce75da91fc06"
 
 SRCREV_FORMAT = "crun_rspec"
@@ -19,9 +19,13 @@ SRC_URI = "git://github.com/containers/crun.git;branch=main;name=crun;protocol=h
            file://0002-libocispec-fix-array-items-parsing.patch;patchdir=libocispec \
           "
 
-PV = "v1.24.0+git"
+PV = "1.26.0+git"
 
-inherit autotools-brokensep pkgconfig
+inherit autotools-brokensep pkgconfig features_check
+
+# crun ships a GNUmakefile that aborts if ./configure hasn't run yet,
+# which breaks autotools_preconfigure's "make clean" on rebuild.
+CLEANBROKEN = "1"
 
 # if this is true, we'll symlink crun to runc for easier integration
 # with container stacks

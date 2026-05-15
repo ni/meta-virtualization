@@ -12,7 +12,7 @@ DEPENDS = " \
 
 SRC_URI = "git://gitlab.com/virt-viewer/virt-viewer.git;protocol=https;branch=master"
 
-SRCREV = "107f60c168c405cf1782b686a65bf4af16ec8c9d"
+SRCREV = "e07dbc915b320f70c6857ea845a67f2843848825"
 PV = "11.0+git"
 
 REQUIRED_DISTRO_FEATURES = "opengl"
@@ -23,6 +23,9 @@ PACKAGECONFIG[libvirt] = "-Dlibvirt=enabled,-Dlibvirt=disabled,libvirt libvirt-g
 PACKAGECONFIG[spice] = "-Dspice=enabled,-Dspice=disabled,spice-gtk spice-protocol"
 PACKAGECONFIG[vnc] = "-Dvnc=enabled,-Dvnc=disabled,gtk-vnc"
 PACKAGECONFIG[vte] = "-Dvte=enabled,-Dvte=disabled,vte"
+
+# GCC 15 is stricter about const qualifiers
+CFLAGS += "-Wno-error=discarded-qualifiers"
 
 inherit meson pkgconfig gtk-icon-cache mime mime-xdg gobject-introspection features_check
 

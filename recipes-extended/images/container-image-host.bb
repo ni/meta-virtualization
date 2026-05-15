@@ -84,10 +84,9 @@ REQUIRED_DISTRO_FEATURES:append = " ${@bb.utils.contains('VIRTUAL-RUNTIME_contai
 # of the host name to make it unique
 IMAGE_FEATURES[validitems] += "virt-unique-hostname"
 IMAGE_FEATURES[validitems] += "container-tools"
-IMAGE_FEATURES[validitems] += "container-registry"
-
 # Container registry configuration packages (opt-in via IMAGE_FEATURES += "container-registry")
 # Requires CONTAINER_REGISTRY_URL and/or DOCKER_REGISTRY_INSECURE to be set
+# (overrides empty default from meta-virt-container.inc)
 FEATURE_PACKAGES_container-registry = "\
     ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine', 'docker docker-moby', 'docker-registry-config', '', d)} \
     ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine', 'podman containerd cri-o', 'container-oci-registry-config', '', d)} \
@@ -119,6 +118,7 @@ IMAGE_INSTALL = " \
     ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine','docker docker-moby','packagegroup-docker','',d)}  \
     ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine','podman','packagegroup-podman','',d)}  \
     ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine','containerd','packagegroup-containerd','',d)}  \
+    ${@bb.utils.contains_any('VIRTUAL-RUNTIME_container_engine','incus','incus','',d)}  \
     ${@bb.utils.contains('VIRTUAL-RUNTIME_container_networking','cni','packagegroup-cni','',d)}  \
     ${@bb.utils.contains('VIRTUAL-RUNTIME_container_networking','netavark','packagegroup-netavark','',d)}  \
     ${@bb.utils.contains('IMAGE_FEATURES','container-tools','packagegroup-container-tools','',d)}  \

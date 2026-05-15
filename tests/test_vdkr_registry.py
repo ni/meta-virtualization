@@ -259,7 +259,11 @@ class TestImageCompoundCommands:
         """Test that 'image' without subcommand shows error."""
         result = self.vdkr.run("image", check=False)
         assert result.returncode != 0
-        assert "subcommand" in result.stderr.lower() or "requires" in result.stderr.lower()
+        # vdkr.run() merges stderr into stdout (see conftest.py), so the
+        # error message ends up in result.stdout even though the script
+        # writes it to stderr (>&2).
+        combined = (result.stdout + result.stderr).lower()
+        assert "subcommand" in combined or "requires" in combined
 
 
 class TestRegistryCLIOverride:
