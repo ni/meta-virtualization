@@ -39,3 +39,5 @@ go_distribution_digeset_sysroot_preprocess () {
 }
 
 FILES:${PN} += "${prefix}/local/go/src/${PKG_NAME}/*"
+
+CVE_PRODUCT = "docker:registry"

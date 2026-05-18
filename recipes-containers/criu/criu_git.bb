@@ -111,3 +111,5 @@ FILES:${PN}-staticdev += " \
             ${libexecdir}/compel/std.lib.a \
             ${libexecdir}/compel/fds.lib.a \
             "
+
+CVE_PRODUCT = "criu:checkpoint\/restore_in_userspace"

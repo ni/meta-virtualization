@@ -96,4 +96,4 @@ COMPATIBLE_HOST = "^(?!(qemu)?mips).*"
 
 RDEPENDS:${PN} += " ${VIRTUAL-RUNTIME_container_runtime}"
 
-CVE_PRODUCT = "containerd"
+CVE_PRODUCT = "linuxfoundation:containerd"
