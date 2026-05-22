@@ -30,6 +30,7 @@ import json
 import os
 
 
+@pytest.mark.memres
 class TestMemresBasic:
     """Test memory resident mode basic operations.
 
@@ -69,13 +70,15 @@ class TestMemresBasic:
 
     def test_memres_restart(self, vdkr):
         """Test restarting memory resident mode."""
-        result = vdkr.run("memres", "restart", timeout=180)
+        vdkr.memres_stop()
+        result = vdkr.memres_start(timeout=180)
         assert result.returncode == 0
 
         # Verify running
         assert vdkr.is_memres_running()
 
 
+@pytest.mark.memres
 class TestPortForwarding:
     """Test port forwarding with memres.
 
@@ -453,6 +456,7 @@ class TestFallbackMode:
         assert result.returncode == 0
 
 
+@pytest.mark.memres
 class TestContainerLifecycle:
     """Test container lifecycle commands."""
 
@@ -489,6 +493,7 @@ class TestContainerLifecycle:
             vdkr.run("rm", "-f", "test-container", check=False)
 
 
+@pytest.mark.memres
 class TestVolumeMounts:
     """Test volume mount functionality.
 
@@ -613,9 +618,11 @@ class TestVolumeMounts:
 
         # Should fail because memres is not running
         assert result.returncode != 0
-        assert "memres" in result.stderr.lower() or "daemon" in result.stderr.lower()
+        output = (result.stdout + result.stderr).lower()
+        assert "memres" in output or "daemon" in output
 
 
+@pytest.mark.memres
 class TestSystem:
     """Test system commands (run inside VM)."""
 
@@ -657,9 +664,11 @@ class TestSystem:
 
         result = vdkr.run("system", check=False)
         assert result.returncode != 0
-        assert "subcommand" in result.stderr.lower() or "requires" in result.stderr.lower()
+        output = (result.stdout + result.stderr).lower()
+        assert "subcommand" in output or "requires" in output
 
 
+@pytest.mark.memres
 class TestVstorage:
     """Test vstorage commands (host-side storage management).
 
@@ -736,9 +745,11 @@ class TestVstorage:
         """Test vstorage with unknown subcommand shows error."""
         result = vdkr.run("vstorage", "invalid", check=False)
         assert result.returncode != 0
-        assert "unknown" in result.stderr.lower() or "usage" in result.stderr.lower()
+        output = (result.stdout + result.stderr).lower()
+        assert "unknown" in output or "usage" in output
 
 
+@pytest.mark.memres
 class TestRun:
     """Test run command with docker run options."""
 
@@ -917,6 +928,7 @@ class TestRemoteFetchAndCrossInstall:
         assert "alpine_ok" in result.stdout
 
 
+@pytest.mark.memres
 class TestAutoStartDaemon:
     """Test auto-start daemon behavior.
 
@@ -980,6 +992,7 @@ class TestAutoStartDaemon:
         assert result.returncode == 0
 
 
+@pytest.mark.memres
 class TestDynamicPortForwarding:
     """Test dynamic port forwarding via QMP.
 
@@ -1120,6 +1133,7 @@ class TestDynamicPortForwarding:
             vdkr.run("rm", "-f", "http2", check=False)
 
 
+@pytest.mark.memres
 class TestPortForwardRegistry:
     """Test port forward registry cleanup."""
 

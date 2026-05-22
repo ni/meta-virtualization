@@ -14,19 +14,6 @@ in configuration file the following line.
 
   DISTRO_FEATURES:append = " virtualization"
 
-If meta-virtualization is included, but virtualization is not enabled as a
-distro feature a warning is printed at parse time:
-
-    You have included the meta-virtualization layer, but
-    'virtualization' has not been enabled in your DISTRO_FEATURES. Some bbappend files
-    may not take effect. See the meta-virtualization README for details on enabling
-    virtualization support.
-
-If you know what you are doing, this warning can be disabled by setting the following
-variable in your configuration:
-
-  SKIP_META_VIRT_SANITY_CHECK = 1
-
 Depending on your use case, there are other distro features in meta-virtualization
 that may also be enabled:
 

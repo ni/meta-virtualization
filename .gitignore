@@ -7,3 +7,4 @@ pyshtables.py
 *~
 scripts/lib/wic/plugins/source/__pycache__
 lib/oeqa/runtime/cases/__pycache__
+tests/__pycache__

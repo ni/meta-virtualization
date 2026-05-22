@@ -6,16 +6,19 @@ LIC_FILES_CHKSUM = "file://src/${GO_IMPORT}/LICENSE.md;md5=80794f9009df723bbc6fe
 
 BBCLASSEXTEND = "native"
 
-GO_IMPORT = "github.com/cpuguy83/go-md2man"
-#GO_INSTALL = "${GO_IMPORT}/bin/go-md2man"
+GO_IMPORT = "github.com/cpuguy83/go-md2man/v2"
+GO_INSTALL = "${GO_IMPORT}/..."
 
-SRC_URI = "git://${GO_IMPORT}.git;branch=master;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX}"
+SRC_URI = "git://github.com/cpuguy83/go-md2man.git;branch=master;protocol=https;destsuffix=${BPN}-${PV}/src/${GO_IMPORT} \
+           gomod://github.com/russross/blackfriday/v2;version=v2.1.0;sha256sum=7852750d58a053ce38b01f2c203208817564f552ebf371b2b630081d7004c6ae \
+          "
 
-SRCREV = "f79a8a8ca69da163eee19ab442bedad7a35bba5a"
-PV = "1.0.10+git"
+SRCREV = "061b6c7cbecd6752049221aa15b7a05160796698"
+PV = "2.0.7+git"
 
-inherit go
+inherit go-mod
 
-do_compile:prepend() {
-	export GO111MODULE=off
+do_compile() {
+    cd ${B}/src/${GO_IMPORT}
+    ${GO} install ${GOBUILDFLAGS} ./...
 }

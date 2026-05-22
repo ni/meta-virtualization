@@ -4,29 +4,29 @@
 # SPDX-License-Identifier: GPL-2.0-only
 #
 # vrunner.sh
-# Core runner for vdkr/vpdmn: execute container commands in QEMU-emulated environment
+# Core runner for vdkr/vpdmn/vxn: execute container commands in a hypervisor VM
 #
 # This script is runtime-agnostic and supports both Docker and Podman via --runtime.
+# It is also hypervisor-agnostic via pluggable backends (QEMU, Xen).
 #
 # Boot flow:
-# 1. QEMU loads kernel + tiny initramfs (busybox + preinit)
-# 2. preinit mounts rootfs.img (/dev/vda) and does switch_root
-# 3. Real /init runs on actual ext4 filesystem
+# 1. Hypervisor boots kernel + tiny initramfs (busybox + preinit)
+# 2. preinit mounts rootfs.img and does switch_root
+# 3. Real /init runs on actual filesystem
 # 4. Container runtime starts, executes command, outputs results
 #
 # This two-stage boot is required because runc needs pivot_root,
 # which doesn't work from initramfs (rootfs isn't a mount point).
 #
-# Drive layout:
-#   /dev/vda = rootfs.img (ro, ext4 with container tools)
-#   /dev/vdb = input disk (optional, user data)
-#   /dev/vdc = state disk (optional, persistent container storage)
+# Drive layout (device names vary by hypervisor):
+#   QEMU: /dev/vda, /dev/vdb, /dev/vdc (virtio-blk)
+#   Xen:  /dev/xvda, /dev/xvdb, /dev/xvdc (xen-blkfront)
 #
-# Version: 3.4.0
+# Version: 3.5.0
 
 set -e
 
-VERSION="3.4.0"
+VERSION="3.5.0"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Runtime selection: docker or podman
@@ -38,23 +38,30 @@ TARGET_ARCH="${VDKR_ARCH:-${VPDMN_ARCH:-aarch64}}"
 TIMEOUT="${VDKR_TIMEOUT:-${VPDMN_TIMEOUT:-300}}"
 VERBOSE="${VDKR_VERBOSE:-${VPDMN_VERBOSE:-false}}"
 
+# Registry authentication config file (docker config.json / podman auth.json).
+# Can be set via $VDKR_CONFIG or $VPDMN_CONFIG in the environment, and is
+# overridden by the --config CLI flag below. The file is passed into the guest
+# over a dedicated read-only virtio-9p share and installed into the guest
+# container runtime's credential location by the init script.
+AUTH_CONFIG="${VDKR_CONFIG:-${VPDMN_CONFIG:-}}"
+
 # Runtime-specific settings (set after parsing --runtime)
 set_runtime_config() {
     case "$RUNTIME" in
         docker)
-            TOOL_NAME="vdkr"
+            TOOL_NAME="${VCONTAINER_RUNTIME_NAME:-vdkr}"
             BLOB_SUBDIR="vdkr-blobs"
             BLOB_SUBDIR_ALT="blobs"
             CMDLINE_PREFIX="docker"
-            STATE_DIR_BASE="${VDKR_STATE_DIR:-$HOME/.vdkr}"
+            STATE_DIR_BASE="${VDKR_STATE_DIR:-$HOME/.${TOOL_NAME}}"
             STATE_FILE="docker-state.img"
             ;;
         podman)
-            TOOL_NAME="vpdmn"
+            TOOL_NAME="${VCONTAINER_RUNTIME_NAME:-vpdmn}"
             BLOB_SUBDIR="vpdmn-blobs"
             BLOB_SUBDIR_ALT="blobs/vpdmn"
             CMDLINE_PREFIX="podman"
-            STATE_DIR_BASE="${VPDMN_STATE_DIR:-$HOME/.vpdmn}"
+            STATE_DIR_BASE="${VPDMN_STATE_DIR:-$HOME/.${TOOL_NAME}}"
             STATE_FILE="podman-state.img"
             ;;
         *)
@@ -232,6 +239,12 @@ OPTIONS:
     --network, -n        Enable networking (slirp user-mode, outbound only)
     --registry <url>     Default registry for unqualified images (e.g., 10.0.2.2:5000/yocto)
     --insecure-registry <host:port>  Mark registry as insecure (HTTP). Can repeat.
+    --config <path>      Path to docker/podman auth config (config.json / auth.json).
+                         Defaults to $VDKR_CONFIG or $VPDMN_CONFIG from environment.
+                         The file is passed to the guest over a dedicated read-only
+                         virtio-9p share and installed at /root/.docker/config.json
+                         (vdkr) or /run/containers/0/auth.json (vpdmn). The host file
+                         must be a regular file with mode 0600 or stricter.
     --interactive, -it   Run in interactive mode (connects terminal to container)
     --timeout <secs>     QEMU timeout [default: 300]
     --idle-timeout <s>   Daemon idle timeout in seconds [default: 1800]
@@ -323,6 +336,7 @@ BATCH_IMPORT="false"
 DAEMON_MODE=""          # start, send, stop, status
 DAEMON_SOCKET_DIR=""    # Directory for daemon socket/PID files
 IDLE_TIMEOUT="1800"     # Default: 30 minutes
+EXIT_GRACE_PERIOD=""    # Entrypoint exit grace period (vxn)
 
 while [ $# -gt 0 ]; do
     case $1 in
@@ -405,6 +419,13 @@ while [ $# -gt 0 ]; do
             REGISTRY_PASS="$2"
             shift 2
             ;;
+        --config)
+            # Path to a docker/podman config file (config.json / auth.json)
+            # Overrides $VDKR_CONFIG / $VPDMN_CONFIG. The file is mounted into
+            # the guest via a dedicated read-only virtio-9p share.
+            AUTH_CONFIG="$2"
+            shift 2
+            ;;
         --interactive|-it)
             INTERACTIVE="true"
             shift
@@ -416,6 +437,10 @@ while [ $# -gt 0 ]; do
         --no-kvm)
             DISABLE_KVM="true"
             shift
+            ;;
+        --hypervisor)
+            VCONTAINER_HYPERVISOR="$2"
+            shift 2
             ;;
         --batch-import)
             BATCH_IMPORT="true"
@@ -439,6 +464,10 @@ while [ $# -gt 0 ]; do
             DAEMON_MODE="interactive"
             shift
             ;;
+        --daemon-run)
+            DAEMON_MODE="run"
+            shift
+            ;;
         --daemon-stop)
             DAEMON_MODE="stop"
             shift
@@ -455,10 +484,19 @@ while [ $# -gt 0 ]; do
             IDLE_TIMEOUT="$2"
             shift 2
             ;;
+        --container-name)
+            CONTAINER_NAME="$2"
+            export CONTAINER_NAME
+            shift 2
+            ;;
         --no-daemon)
             # Placeholder for CLI wrapper - vrunner.sh itself doesn't use this
             # but we accept it so callers can pass it through
             shift
+            ;;
+        --exit-grace-period)
+            EXIT_GRACE_PERIOD="$2"
+            shift 2
             ;;
         --verbose|-v)
             VERBOSE="true"
@@ -485,6 +523,25 @@ done
 set_runtime_config
 set_blob_dir
 
+# Load hypervisor backend
+VCONTAINER_HYPERVISOR="${VCONTAINER_HYPERVISOR:-qemu}"
+VCONTAINER_LIBDIR="${VCONTAINER_LIBDIR:-$SCRIPT_DIR}"
+HV_BACKEND="$VCONTAINER_LIBDIR/vrunner-backend-${VCONTAINER_HYPERVISOR}.sh"
+if [ ! -f "$HV_BACKEND" ]; then
+    echo "ERROR: Hypervisor backend not found: $HV_BACKEND" >&2
+    echo "Available backends:" >&2
+    ls "$VCONTAINER_LIBDIR"/vrunner-backend-*.sh 2>/dev/null | sed 's/.*vrunner-backend-//;s/\.sh$//' >&2
+    exit 1
+fi
+source "$HV_BACKEND"
+
+# Xen backend uses vxn-init.sh which is a unified init (no Docker/Podman
+# daemon in guest). It always parses docker_* kernel parameters regardless
+# of which frontend (vdkr/vpdmn) invoked us.
+if [ "$VCONTAINER_HYPERVISOR" = "xen" ]; then
+    CMDLINE_PREFIX="docker"
+fi
+
 # Daemon mode handling
 # Set default socket directory based on architecture
 # If --state-dir was provided, use it for daemon files too
@@ -503,6 +560,12 @@ DAEMON_INPUT_SIZE_MB=2048  # 2GB input disk for daemon mode
 
 # Daemon helper functions
 daemon_is_running() {
+    # Use backend-specific check if available (e.g. Xen xl list)
+    if type hv_daemon_is_running >/dev/null 2>&1; then
+        hv_daemon_is_running
+        return $?
+    fi
+    # Default: check PID (works for QEMU)
     if [ -f "$DAEMON_PID_FILE" ]; then
         local pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
         if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -514,8 +577,10 @@ daemon_is_running() {
 
 daemon_status() {
     if daemon_is_running; then
-        local pid=$(cat "$DAEMON_PID_FILE")
-        echo "Daemon running (PID: $pid)"
+        local pid=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
+        local vm_id
+        vm_id=$(hv_get_vm_id 2>/dev/null || echo "$pid")
+        echo "Daemon running (VM: $vm_id)"
         echo "Socket: $DAEMON_SOCKET"
         echo "Architecture: $TARGET_ARCH"
         return 0
@@ -531,6 +596,14 @@ daemon_stop() {
         return 0
     fi
 
+    # Use backend-specific stop if available (e.g. Xen xl shutdown/destroy)
+    if type hv_daemon_stop >/dev/null 2>&1; then
+        hv_daemon_stop
+        rm -f "$DAEMON_PID_FILE" "$DAEMON_SOCKET"
+        return 0
+    fi
+
+    # Default: PID-based stop (works for QEMU)
     local pid=$(cat "$DAEMON_PID_FILE")
     log "INFO" "Stopping daemon (PID: $pid)..."
 
@@ -563,6 +636,12 @@ daemon_send() {
     if ! daemon_is_running; then
         log "ERROR" "Daemon is not running. Start it with --daemon-start"
         exit 1
+    fi
+
+    # Use backend-specific send if available (e.g. Xen PTY-based IPC)
+    if type hv_daemon_send >/dev/null 2>&1; then
+        hv_daemon_send "$cmd"
+        return $?
     fi
 
     if [ ! -S "$DAEMON_SOCKET" ]; then
@@ -669,6 +748,14 @@ daemon_interactive() {
 
     if ! daemon_is_running; then
         log "ERROR" "Daemon is not running"
+        return 1
+    fi
+
+    # PTY-based backends don't support interactive daemon mode
+    # (file-descriptor polling isn't practical for interactive I/O)
+    if type hv_daemon_send >/dev/null 2>&1; then
+        log "ERROR" "Interactive daemon mode not supported with ${VCONTAINER_HYPERVISOR} backend"
+        log "ERROR" "Use: ${TOOL_NAME} -it --no-daemon run ... for interactive mode"
         return 1
     fi
 
@@ -780,6 +867,124 @@ fi
 TEMP_DIR="${TMPDIR:-/tmp}/vdkr-$$"
 mkdir -p "$TEMP_DIR"
 
+# ============================================================================
+# Registry auth config (docker config.json / podman auth.json)
+# ============================================================================
+# The AUTH_CONFIG path (from $VDKR_CONFIG, $VPDMN_CONFIG, or --config) points
+# to a file containing container-registry credentials. For defence-in-depth we:
+#   * reject non-regular files (symlinks, devices, directories)
+#   * reject files readable by group/other (mode must be <= 0600)
+#   * warn if the file is not owned by the invoking user
+#   * copy it into a private per-invocation directory under $TEMP_DIR at 0400
+#   * expose it to the guest via a *separate* read-only virtio-9p tag
+#     ("${TOOL_NAME}_auth") mounted at /mnt/auth (not the generic /mnt/share
+#     which holds input/output and is wiped between daemon commands)
+#   * never pass the file contents or path on the kernel cmdline; only a flag
+#     "${CMDLINE_PREFIX}_auth=1" to tell the init script to look at /mnt/auth
+#   * rely on the existing $TEMP_DIR EXIT/INT/TERM trap to delete the copy
+#
+# The auth file is never logged (path is visible, but contents are not).
+AUTH_SHARE_DIR=""
+
+validate_auth_config() {
+    local path="$1"
+
+    # Resolve symlinks to the canonical path so the perm check applies to the
+    # actual file, but still require the *named* path to be a regular file
+    # (not a symlink pointing into sensitive areas like /proc/self/environ).
+    if [ -L "$path" ]; then
+        log "ERROR" "--config must not be a symlink: $path"
+        return 1
+    fi
+    if [ ! -e "$path" ]; then
+        log "ERROR" "--config file not found: $path"
+        return 1
+    fi
+    if [ ! -f "$path" ]; then
+        log "ERROR" "--config must be a regular file: $path"
+        return 1
+    fi
+    if [ ! -r "$path" ]; then
+        log "ERROR" "--config file is not readable: $path"
+        return 1
+    fi
+
+    # Size sanity: docker config.json / podman auth.json should be small.
+    # 1 MiB is already generous. Reject unusually large files to avoid
+    # accidentally shipping a large credential blob.
+    local size
+    size=$(stat -c %s "$path" 2>/dev/null || echo 0)
+    if [ "$size" -gt 1048576 ]; then
+        log "ERROR" "--config file is too large ($size bytes, max 1 MiB): $path"
+        return 1
+    fi
+    # Minimum valid JSON object "{}" is 2 bytes. Anything smaller (including a
+    # 0-byte truncation or a lone newline from "echo '' > file") can't be a
+    # real auth config; reject rather than silently shipping garbage.
+    if [ "$size" -lt 2 ]; then
+        log "ERROR" "--config file is empty or too small to be valid JSON: $path"
+        return 1
+    fi
+
+    # Permission check: must not be readable by group or world.
+    local mode
+    mode=$(stat -c %a "$path" 2>/dev/null || echo 0)
+    # stat %a emits octal without leading zero. Forbid any group/other bits.
+    case "$mode" in
+        400|600|200) ;;
+        *)
+            log "ERROR" "--config file has unsafe permissions ($mode); expected 0600 or 0400."
+            log "ERROR" "Fix with: chmod 600 \"$path\""
+            return 1
+            ;;
+    esac
+
+    # Ownership check: warn if file is not owned by the current user.
+    local uid owner
+    uid=$(id -u)
+    owner=$(stat -c %u "$path" 2>/dev/null || echo "")
+    if [ -n "$owner" ] && [ "$owner" != "$uid" ]; then
+        log "WARN" "--config file is not owned by current user (uid=$uid, owner=$owner)"
+    fi
+
+    return 0
+}
+
+# Stage the auth config into a dedicated read-only 9p share. Must be called
+# AFTER $TEMP_DIR exists and AFTER hypervisor backend functions are sourced.
+# Sets $AUTH_SHARE_DIR and appends to $HV_OPTS / $KERNEL_APPEND.
+setup_auth_share() {
+    [ -z "$AUTH_CONFIG" ] && return 0
+
+    if ! validate_auth_config "$AUTH_CONFIG"; then
+        log "ERROR" "Refusing to stage $AUTH_CONFIG — see above."
+        exit 1
+    fi
+
+    AUTH_SHARE_DIR="$TEMP_DIR/auth_share"
+    # 0700 so nothing outside our process can peek at the staged file.
+    mkdir -p "$AUTH_SHARE_DIR"
+    chmod 700 "$AUTH_SHARE_DIR"
+
+    # Always stage as config.json regardless of source filename — the guest
+    # init script knows to look for this fixed name.
+    if ! cp "$AUTH_CONFIG" "$AUTH_SHARE_DIR/config.json"; then
+        log "ERROR" "Failed to stage auth config"
+        exit 1
+    fi
+    chmod 400 "$AUTH_SHARE_DIR/config.json"
+
+    local auth_tag="${TOOL_NAME}_auth"
+    hv_build_9p_opts "$AUTH_SHARE_DIR" "$auth_tag" "readonly=on"
+    KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_auth=1"
+
+    # Deliberately log the *fact* of staging, not the path contents or
+    # credentials. The path itself is useful for debugging and appears in
+    # --verbose mode only.
+    log "INFO" "Registry auth config staged on read-only 9p share (tag=$auth_tag)"
+    log "DEBUG" "Auth source: $AUTH_CONFIG"
+}
+
 cleanup() {
     if [ "$KEEP_TEMP" = "true" ]; then
         log "DEBUG" "Keeping temp directory: $TEMP_DIR"
@@ -889,11 +1094,15 @@ if [ "$BATCH_IMPORT" = "true" ]; then
         fi
     done
 
-    # Add final images command to show what was imported
+    # Show what was imported (informational only).
+    # IMPORTANT: Must not use 'exit' — the command runs inside PID 1 init's
+    # eval, and exit kills init → kernel panic. The import chain runs in a
+    # subshell so its exit code is captured without risk. The images listing
+    # is best-effort and doesn't affect the result.
     if [ "$RUNTIME" = "docker" ]; then
-        COMPOUND_CMD="$COMPOUND_CMD && docker images"
+        COMPOUND_CMD="( $COMPOUND_CMD ); docker images 2>/dev/null; true"
     else
-        COMPOUND_CMD="$COMPOUND_CMD && podman images"
+        COMPOUND_CMD="( $COMPOUND_CMD ); podman images 2>/dev/null; true"
     fi
 
     log "DEBUG" "Batch command: $COMPOUND_CMD"
@@ -933,36 +1142,16 @@ log "INFO" "Output type: $OUTPUT_TYPE"
 [ "$NETWORK" = "true" ] && log "INFO" "Networking: enabled (slirp)"
 [ "$INTERACTIVE" = "true" ] && log "INFO" "Interactive mode: enabled"
 
-# Find kernel, initramfs, and rootfs
-case "$TARGET_ARCH" in
-    aarch64)
-        KERNEL_IMAGE="$BLOB_DIR/aarch64/Image"
-        INITRAMFS="$BLOB_DIR/aarch64/initramfs.cpio.gz"
-        ROOTFS_IMG="$BLOB_DIR/aarch64/rootfs.img"
-        QEMU_CMD="qemu-system-aarch64"
-        QEMU_MACHINE="-M virt -cpu cortex-a57"
-        CONSOLE="ttyAMA0"
-        ;;
-    x86_64)
-        KERNEL_IMAGE="$BLOB_DIR/x86_64/bzImage"
-        INITRAMFS="$BLOB_DIR/x86_64/initramfs.cpio.gz"
-        ROOTFS_IMG="$BLOB_DIR/x86_64/rootfs.img"
-        QEMU_CMD="qemu-system-x86_64"
-        # Use q35 + Skylake-Client to match oe-core qemux86-64 machine
-        QEMU_MACHINE="-M q35 -cpu Skylake-Client"
-        CONSOLE="ttyS0"
-        ;;
-    *)
-        log "ERROR" "Unsupported architecture: $TARGET_ARCH"
-        exit 1
-        ;;
-esac
+# Initialize hypervisor backend: set arch-specific paths and commands
+hv_setup_arch
+hv_check_accel
+hv_find_command
 
 # Check for kernel
 if [ ! -f "$KERNEL_IMAGE" ]; then
     log "ERROR" "Kernel not found: $KERNEL_IMAGE"
-    log "ERROR" "Set VDKR_BLOB_DIR or --blob-dir to location of vdkr blobs"
-    log "ERROR" "Build with: MACHINE=qemuarm64 bitbake vdkr-initramfs-build"
+    log "ERROR" "Set --blob-dir to location of blobs"
+    log "ERROR" "Build with: bitbake ${TOOL_NAME}-initramfs-create"
     exit 1
 fi
 
@@ -973,60 +1162,19 @@ if [ ! -f "$INITRAMFS" ]; then
     exit 1
 fi
 
-# Check for rootfs image (ext4 with Docker tools)
+# Check for rootfs image
 if [ ! -f "$ROOTFS_IMG" ]; then
     log "ERROR" "Rootfs image not found: $ROOTFS_IMG"
     log "ERROR" "Build with: MACHINE=qemuarm64 bitbake vdkr-initramfs-create"
     exit 1
 fi
 
-# Find QEMU - check PATH and common locations
-if ! command -v "$QEMU_CMD" >/dev/null 2>&1; then
-    # Try common locations
-    for path in \
-        "${STAGING_BINDIR_NATIVE:-}" \
-        "/usr/bin"; do
-        if [ -n "$path" ] && [ -x "$path/$QEMU_CMD" ]; then
-            QEMU_CMD="$path/$QEMU_CMD"
-            break
-        fi
-    done
-fi
-
-if ! command -v "$QEMU_CMD" >/dev/null 2>&1 && [ ! -x "$QEMU_CMD" ]; then
-    log "ERROR" "QEMU not found: $QEMU_CMD"
-    exit 1
-fi
-
-log "DEBUG" "Using QEMU: $QEMU_CMD"
-
-# Check for KVM acceleration (when host matches target)
-USE_KVM="false"
-if [ "$DISABLE_KVM" = "true" ]; then
-    log "DEBUG" "KVM disabled by --no-kvm flag"
-else
-    HOST_ARCH=$(uname -m)
-    if [ "$HOST_ARCH" = "$TARGET_ARCH" ] || \
-       { [ "$HOST_ARCH" = "x86_64" ] && [ "$TARGET_ARCH" = "x86_64" ]; }; then
-        if [ -w /dev/kvm ]; then
-            USE_KVM="true"
-            # Use host CPU for best performance with KVM
-            case "$TARGET_ARCH" in
-                x86_64)
-                    QEMU_MACHINE="-M q35 -cpu host"
-                    ;;
-                aarch64)
-                    QEMU_MACHINE="-M virt -cpu host"
-                    ;;
-            esac
-            log "INFO" "KVM acceleration enabled"
-        else
-            log "DEBUG" "KVM not available (no write access to /dev/kvm)"
-        fi
-    fi
-fi
-
 log "DEBUG" "Using initramfs: $INITRAMFS"
+
+# Let backend prepare container image if needed (e.g., Xen pulls OCI via skopeo)
+if type hv_prepare_container >/dev/null 2>&1; then
+    hv_prepare_container
+fi
 
 # Create input disk image if needed
 DISK_OPTS=""
@@ -1048,22 +1196,43 @@ if [ -n "$INPUT_PATH" ] && [ "$INPUT_TYPE" != "none" ]; then
     dd if=/dev/zero of="$INPUT_IMG" bs=1M count=$SIZE_MB 2>/dev/null
 
     if [ -d "$INPUT_PATH" ]; then
-        mke2fs -t ext4 -d "$INPUT_PATH" "$INPUT_IMG" 2>/dev/null
+        mke2fs -t ext4 -d "$INPUT_PATH" "$INPUT_IMG" >/dev/null 2>&1
     else
         # Single file - create temp dir with the file
         EXTRACT_DIR="$TEMP_DIR/input-extract"
         mkdir -p "$EXTRACT_DIR"
         cp "$INPUT_PATH" "$EXTRACT_DIR/"
-        mke2fs -t ext4 -d "$EXTRACT_DIR" "$INPUT_IMG" 2>/dev/null
+        mke2fs -t ext4 -d "$EXTRACT_DIR" "$INPUT_IMG" >/dev/null 2>&1
     fi
 
     DISK_OPTS="-drive file=$INPUT_IMG,if=virtio,format=raw"
     log "DEBUG" "Input disk: $(ls -lh "$INPUT_IMG" | awk '{print $5}')"
 fi
 
+# Daemon run mode: try to use memres DomU, fall back to ephemeral
+# This runs after input disk creation so we have the container disk ready
+if [ "$DAEMON_MODE" = "run" ]; then
+    if type hv_daemon_ping >/dev/null 2>&1 && hv_daemon_ping; then
+        # Memres DomU is responsive — use it
+        log "INFO" "Memres DomU is idle, dispatching container..."
+        INPUT_IMG_PATH=""
+        if [ -n "$DISK_OPTS" ]; then
+            INPUT_IMG_PATH=$(echo "$DISK_OPTS" | sed -n 's/.*file=\([^,]*\).*/\1/p')
+        fi
+        hv_daemon_run_container "$DOCKER_CMD" "$INPUT_IMG_PATH"
+        exit $?
+    else
+        # Memres DomU is occupied or not responding — fall through to ephemeral
+        log "INFO" "Memres occupied or not responding, using ephemeral mode"
+        DAEMON_MODE=""
+    fi
+fi
+
 # Create state disk for persistent storage (--state-dir)
+# Xen backend skips this: DomU Docker storage lives in the guest's overlay
+# filesystem and persists as long as the domain is running (daemon mode).
 STATE_DISK_OPTS=""
-if [ -n "$STATE_DIR" ]; then
+if [ -n "$STATE_DIR" ] && ! type hv_skip_state_disk >/dev/null 2>&1; then
     mkdir -p "$STATE_DIR"
     STATE_IMG="$STATE_DIR/$STATE_FILE"
 
@@ -1081,7 +1250,7 @@ if [ -n "$STATE_DIR" ]; then
         log "INFO" "Creating new state disk at $STATE_IMG..."
         # Create 2GB state disk for Docker storage
         dd if=/dev/zero of="$STATE_IMG" bs=1M count=2048 2>/dev/null
-        mke2fs -t ext4 "$STATE_IMG" 2>/dev/null
+        mke2fs -t ext4 "$STATE_IMG" >/dev/null 2>&1
     else
         log "INFO" "Using existing state disk: $STATE_IMG"
     fi
@@ -1090,6 +1259,10 @@ if [ -n "$STATE_DIR" ]; then
     # Combined with graceful shutdown wait, this ensures data integrity
     STATE_DISK_OPTS="-drive file=$STATE_IMG,if=virtio,format=raw,cache=directsync"
     log "DEBUG" "State disk: $(ls -lh "$STATE_IMG" | awk '{print $5}')"
+elif [ -n "$STATE_DIR" ]; then
+    # Backend skips state disk but we still need the directory for daemon files
+    mkdir -p "$STATE_DIR"
+    log "DEBUG" "State disk: skipped (${VCONTAINER_HYPERVISOR} backend manages guest storage)"
 fi
 
 # Create state disk from input-storage tar (--input-storage)
@@ -1110,7 +1283,7 @@ if [ -n "$INPUT_STORAGE" ] && [ -z "$STATE_DIR" ]; then
     log "DEBUG" "Tar size: ${TAR_SIZE_KB}KB, State disk: ${STATE_SIZE_MB}MB"
 
     dd if=/dev/zero of="$STATE_IMG" bs=1M count=$STATE_SIZE_MB 2>/dev/null
-    mke2fs -t ext4 "$STATE_IMG" 2>/dev/null
+    mke2fs -t ext4 "$STATE_IMG" >/dev/null 2>&1
 
     # Mount and extract tar
     MOUNT_DIR="$TEMP_DIR/state-mount"
@@ -1132,7 +1305,7 @@ if [ -n "$INPUT_STORAGE" ] && [ -z "$STATE_DIR" ]; then
         EXTRACT_DIR="$TEMP_DIR/state-extract"
         mkdir -p "$EXTRACT_DIR"
         tar --no-same-owner --strip-components=1 --exclude=volumes/backingFsBlockDev -xf "$INPUT_STORAGE" -C "$EXTRACT_DIR"
-        mke2fs -t ext4 -d "$EXTRACT_DIR" "$STATE_IMG" 2>/dev/null
+        mke2fs -t ext4 -d "$EXTRACT_DIR" "$STATE_IMG" >/dev/null 2>&1
     fi
 
     # Use cache=directsync to ensure writes are flushed to disk
@@ -1147,9 +1320,9 @@ DOCKER_CMD_B64=$(echo -n "$DOCKER_CMD" | base64 -w0)
 # In interactive mode, use 'quiet' to suppress kernel boot messages
 # Use CMDLINE_PREFIX for runtime-specific parameters (docker_ or podman_)
 if [ "$INTERACTIVE" = "true" ]; then
-    KERNEL_APPEND="console=$CONSOLE,115200 quiet loglevel=0 init=/init"
+    KERNEL_APPEND="console=$(hv_get_console_device),115200 quiet loglevel=0 init=/init"
 else
-    KERNEL_APPEND="console=$CONSOLE,115200 init=/init"
+    KERNEL_APPEND="console=$(hv_get_console_device),115200 init=/init"
 fi
 # Tell init script which runtime we're using
 KERNEL_APPEND="$KERNEL_APPEND runtime=$RUNTIME"
@@ -1198,69 +1371,32 @@ if [ "$INTERACTIVE" = "true" ]; then
     KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_interactive=1"
 fi
 
-# Build QEMU command
+# Exit grace period for entrypoint death detection (vxn)
+if [ -n "${EXIT_GRACE_PERIOD:-}" ]; then
+    KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_exit_grace=$EXIT_GRACE_PERIOD"
+fi
+
+# Build VM configuration via hypervisor backend
 # Drive ordering is important:
-#   /dev/vda = rootfs.img (read-only, ext4 with Docker tools)
-#   /dev/vdb = input disk (if any)
-#   /dev/vdc = state disk (if any)
-# The preinit script in initramfs mounts /dev/vda and does switch_root
-# Build QEMU options
-QEMU_OPTS="$QEMU_MACHINE -nographic -smp 2 -m 2048 -no-reboot"
-if [ "$USE_KVM" = "true" ]; then
-    QEMU_OPTS="$QEMU_OPTS -enable-kvm"
-fi
-QEMU_OPTS="$QEMU_OPTS -kernel $KERNEL_IMAGE"
-QEMU_OPTS="$QEMU_OPTS -initrd $INITRAMFS"
-QEMU_OPTS="$QEMU_OPTS -drive file=$ROOTFS_IMG,if=virtio,format=raw,readonly=on"
-QEMU_OPTS="$QEMU_OPTS $DISK_OPTS"
-QEMU_OPTS="$QEMU_OPTS $STATE_DISK_OPTS"
+#   rootfs.img (read-only), input disk (if any), state disk (if any)
+hv_build_disk_opts
+hv_build_network_opts
+hv_build_vm_cmd
 
-# Add networking if enabled (slirp user-mode networking)
-if [ "$NETWORK" = "true" ]; then
-    # Slirp provides NAT'd outbound connectivity without root privileges
-    # Guest gets 10.0.2.15, gateway is 10.0.2.2, DNS is 10.0.2.3
-    NETDEV_OPTS="user,id=net0"
-
-    # Add port forwards - QEMU forwards host:port -> VM:port
-    # Docker's iptables handles VM:port -> container:port
-    for pf in "${PORT_FORWARDS[@]}"; do
-        # Parse host_port:container_port or host_port:container_port/protocol
-        HOST_PORT="${pf%%:*}"
-        CONTAINER_PART="${pf#*:}"
-        CONTAINER_PORT="${CONTAINER_PART%%/*}"
-
-        # Check for protocol suffix (default to tcp)
-        if [[ "$CONTAINER_PART" == */* ]]; then
-            PROTOCOL="${CONTAINER_PART##*/}"
-        else
-            PROTOCOL="tcp"
-        fi
-
-        # Forward to HOST_PORT on VM; Docker -p handles container port mapping
-        NETDEV_OPTS="$NETDEV_OPTS,hostfwd=$PROTOCOL::$HOST_PORT-:$HOST_PORT"
-        log "INFO" "Port forward: host:$HOST_PORT -> VM:$HOST_PORT (Docker maps to container:$CONTAINER_PORT)"
-    done
-
-    QEMU_OPTS="$QEMU_OPTS -netdev $NETDEV_OPTS -device virtio-net-pci,netdev=net0"
-else
-    # Explicitly disable networking
-    QEMU_OPTS="$QEMU_OPTS -nic none"
-fi
-
-# Batch-import mode: add virtio-9p for fast output (instead of slow console base64)
+# Batch-import mode: add 9p for fast output (instead of slow console base64)
 if [ "$BATCH_IMPORT" = "true" ]; then
     BATCH_SHARE_DIR="$TEMP_DIR/share"
     mkdir -p "$BATCH_SHARE_DIR"
     SHARE_TAG="${TOOL_NAME}_share"
-    QEMU_OPTS="$QEMU_OPTS -virtfs local,path=$BATCH_SHARE_DIR,mount_tag=$SHARE_TAG,security_model=none,id=$SHARE_TAG"
+    hv_build_9p_opts "$BATCH_SHARE_DIR" "$SHARE_TAG"
     KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_9p=1"
-    log "INFO" "Using virtio-9p for fast storage output"
+    log "INFO" "Using 9p for fast storage output"
 fi
 
-# Daemon mode: add virtio-serial for command channel
+# Daemon mode: add serial channel for command I/O
 if [ "$DAEMON_MODE" = "start" ]; then
-    # Check for required tools
-    if ! command -v socat >/dev/null 2>&1; then
+    # Check for required tools (socat needed unless backend provides PTY-based IPC)
+    if ! type hv_daemon_send >/dev/null 2>&1 && ! command -v socat >/dev/null 2>&1; then
         log "ERROR" "Daemon mode requires 'socat' but it is not installed."
         log "ERROR" "Install with: sudo apt install socat"
         exit 1
@@ -1272,33 +1408,17 @@ if [ "$DAEMON_MODE" = "start" ]; then
         exit 1
     fi
 
-    # Create socket directory
+    # Create socket directory and shared folder for daemon 9p
     mkdir -p "$DAEMON_SOCKET_DIR"
-
-    # Create shared directory for file I/O (virtio-9p)
     DAEMON_SHARE_DIR="$DAEMON_SOCKET_DIR/share"
     mkdir -p "$DAEMON_SHARE_DIR"
-
-    # Add virtio-9p for shared directory access
-    # Host writes to $DAEMON_SHARE_DIR, guest mounts as /mnt/share
-    # Use runtime-specific mount tag (vdkr_share or vpdmn_share)
     SHARE_TAG="${TOOL_NAME}_share"
-    # Use security_model=none for simplest file sharing (no permission mapping)
-    # This allows writes from container (running as root) to propagate to host
-    QEMU_OPTS="$QEMU_OPTS -virtfs local,path=$DAEMON_SHARE_DIR,mount_tag=$SHARE_TAG,security_model=none,id=$SHARE_TAG"
-    # Tell init script to mount the share
+    hv_build_9p_opts "$DAEMON_SHARE_DIR" "$SHARE_TAG"
     KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_9p=1"
 
-    # Add virtio-serial device for command channel
-    # Using virtserialport creates /dev/vport0p1 in guest, host sees unix socket
-    # virtconsole would use hvc* but requires virtio_console kernel module
-    QEMU_OPTS="$QEMU_OPTS -chardev socket,id=vdkr,path=$DAEMON_SOCKET,server=on,wait=off"
-    QEMU_OPTS="$QEMU_OPTS -device virtio-serial-pci"
-    QEMU_OPTS="$QEMU_OPTS -device virtserialport,chardev=vdkr,name=vdkr"
-
-    # Add QMP socket for dynamic control (port forwarding, etc.)
-    QMP_SOCKET="$DAEMON_SOCKET_DIR/qmp.sock"
-    QEMU_OPTS="$QEMU_OPTS -qmp unix:$QMP_SOCKET,server,nowait"
+    # Add daemon command channel (backend-specific: virtio-serial or PV console)
+    hv_build_daemon_opts
+    HV_OPTS="$HV_OPTS $HV_DAEMON_OPTS"
 
     # Tell init script to run in daemon mode with idle timeout
     KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_daemon=1"
@@ -1308,36 +1428,18 @@ if [ "$DAEMON_MODE" = "start" ]; then
     if [ "$NETWORK" != "true" ]; then
         log "INFO" "Enabling networking for daemon mode"
         NETWORK="true"
-        # Build netdev options with any port forwards
-        DAEMON_NETDEV="user,id=net0"
+        hv_build_network_opts
+        # Re-add network opts (they were built without port forwards initially)
+        # The rebuild includes port forwards since NETWORK is now true
+    fi
+    # Ensure port forwards are logged
+    if [ ${#PORT_FORWARDS[@]} -gt 0 ]; then
         for pf in "${PORT_FORWARDS[@]}"; do
-            # Parse host_port:container_port or host_port:container_port/protocol
             HOST_PORT="${pf%%:*}"
             CONTAINER_PART="${pf#*:}"
             CONTAINER_PORT="${CONTAINER_PART%%/*}"
-            if [[ "$CONTAINER_PART" == */* ]]; then
-                PROTOCOL="${CONTAINER_PART##*/}"
-            else
-                PROTOCOL="tcp"
-            fi
-            # Forward to HOST_PORT on VM; Docker -p handles container port mapping
-            DAEMON_NETDEV="$DAEMON_NETDEV,hostfwd=$PROTOCOL::$HOST_PORT-:$HOST_PORT"
-            log "INFO" "Port forward: host:$HOST_PORT -> VM:$HOST_PORT (Docker maps to container:$CONTAINER_PORT)"
+            log "INFO" "Port forward configured: $HOST_PORT -> $CONTAINER_PORT"
         done
-        QEMU_OPTS="$QEMU_OPTS -netdev $DAEMON_NETDEV -device virtio-net-pci,netdev=net0"
-    else
-        # NETWORK was already true, but check if we need to add port forwards
-        # that weren't included in the earlier networking setup
-        # (This happens when NETWORK was set to true before daemon mode was detected)
-        if [ ${#PORT_FORWARDS[@]} -gt 0 ]; then
-            # Port forwards should already be included from earlier networking setup
-            for pf in "${PORT_FORWARDS[@]}"; do
-                HOST_PORT="${pf%%:*}"
-                CONTAINER_PART="${pf#*:}"
-                CONTAINER_PORT="${CONTAINER_PART%%/*}"
-                log "INFO" "Port forward configured: $HOST_PORT -> $CONTAINER_PORT"
-            done
-        fi
     fi
 
     # Copy CA certificate to shared folder (too large for kernel cmdline)
@@ -1346,26 +1448,37 @@ if [ "$DAEMON_MODE" = "start" ]; then
         log "DEBUG" "CA certificate copied to shared folder"
     fi
 
+    # Stage registry auth config (config.json / auth.json) on a dedicated
+    # read-only 9p share. See setup_auth_share() for the security model.
+    setup_auth_share
+
     log "INFO" "Starting daemon..."
     log "DEBUG" "PID file: $DAEMON_PID_FILE"
     log "DEBUG" "Socket: $DAEMON_SOCKET"
-    log "DEBUG" "Command: $QEMU_CMD $QEMU_OPTS -append \"$KERNEL_APPEND\""
 
-    # Start QEMU in background
-    $QEMU_CMD $QEMU_OPTS -append "$KERNEL_APPEND" > "$DAEMON_QEMU_LOG" 2>&1 &
-    QEMU_PID=$!
-    echo "$QEMU_PID" > "$DAEMON_PID_FILE"
+    # Start VM in background via backend
+    hv_start_vm_background "$KERNEL_APPEND" "$DAEMON_QEMU_LOG" ""
+    echo "$HV_VM_PID" > "$DAEMON_PID_FILE"
 
-    log "INFO" "QEMU started (PID: $QEMU_PID)"
+    # Let backend save any extra state (e.g. Xen domain name)
+    if type hv_daemon_save_state >/dev/null 2>&1; then
+        hv_daemon_save_state
+    fi
 
-    # Wait for socket to appear (Docker starting)
-    # Docker can take 60+ seconds to start, so wait up to 120 seconds
+    log "INFO" "VM started (PID: $HV_VM_PID)"
+
+    # Wait for daemon to be ready (backend-specific or socket-based)
     log "INFO" "Waiting for daemon to be ready..."
     READY=false
     for i in $(seq 1 120); do
-        if [ -S "$DAEMON_SOCKET" ]; then
-            # Socket exists, try to connect
-            # Keep stdin open for 3 seconds to allow response to arrive
+        # Backend-specific readiness check (e.g. Xen PTY-based)
+        if type hv_daemon_ping >/dev/null 2>&1; then
+            if hv_daemon_ping; then
+                log "DEBUG" "Got PONG response (backend)"
+                READY=true
+                break
+            fi
+        elif [ -S "$DAEMON_SOCKET" ]; then
             RESPONSE=$( { echo "===PING==="; sleep 3; } | timeout 10 socat - "UNIX-CONNECT:$DAEMON_SOCKET" 2>/dev/null || true)
             if echo "$RESPONSE" | grep -q "===PONG==="; then
                 log "DEBUG" "Got PONG response"
@@ -1376,185 +1489,184 @@ if [ "$DAEMON_MODE" = "start" ]; then
             fi
         fi
 
-        # Check if QEMU died
-        if ! kill -0 "$QEMU_PID" 2>/dev/null; then
-            log "ERROR" "QEMU process died during startup"
+        # Check if VM died
+        if ! hv_is_vm_running; then
+            log "ERROR" "VM process died during startup"
             cat "$DAEMON_QEMU_LOG" >&2
             rm -f "$DAEMON_PID_FILE"
             exit 1
         fi
 
-        log "DEBUG" "Waiting... ($i/60)"
+        log "DEBUG" "Waiting... ($i/120)"
         sleep 1
     done
 
     if [ "$READY" = "true" ]; then
         log "INFO" "Daemon is ready!"
 
-        # Start host-side idle watchdog if timeout is set
+        # Set up port forwards via backend (e.g., iptables for Xen)
+        hv_setup_port_forwards
+
+        # Start host-side idle watchdog if timeout is set.
+        #
+        # The watchdog is a long-running background subshell that outlives
+        # vrunner.sh itself. It MUST fully detach from the invoking shell's
+        # stdio: when the caller (e.g. the vdkr CLI, or a test harness that
+        # wraps vdkr in subprocess.run(capture_output=True)) reads
+        # stdout/stderr via pipes, any inherited write-end fd in the
+        # watchdog keeps those pipes open and blocks the caller's
+        # communicate()/read until the daemon is stopped (up to
+        # IDLE_TIMEOUT, default 30 minutes). Redirect all three fds so the
+        # watchdog holds no descriptors from the caller, and disown it so
+        # the shell's job table doesn't retain it either.
         if [ "$IDLE_TIMEOUT" -gt 0 ] 2>/dev/null; then
             ACTIVITY_FILE="$DAEMON_SOCKET_DIR/activity"
             touch "$ACTIVITY_FILE"
 
-            # Spawn background watchdog
             (
-                # Container status file - guest writes this via virtio-9p share
-                # This avoids sending commands through daemon socket which corrupts output
                 CONTAINER_STATUS_FILE="$DAEMON_SHARE_DIR/.containers_running"
-
-                # Scale check interval to idle timeout (check ~5 times before timeout)
                 CHECK_INTERVAL=$((IDLE_TIMEOUT / 5))
                 [ "$CHECK_INTERVAL" -lt 10 ] && CHECK_INTERVAL=10
                 [ "$CHECK_INTERVAL" -gt 60 ] && CHECK_INTERVAL=60
 
                 while true; do
                     sleep "$CHECK_INTERVAL"
-                    [ -f "$ACTIVITY_FILE" ] || exit 0  # Clean exit if file removed
-                    [ -f "$DAEMON_PID_FILE" ] || exit 0  # PID file gone
+                    [ -f "$ACTIVITY_FILE" ] || exit 0
+                    [ -f "$DAEMON_PID_FILE" ] || exit 0
 
-                    # Check if QEMU process is still running
-                    QEMU_PID=$(cat "$DAEMON_PID_FILE" 2>/dev/null)
-                    [ -n "$QEMU_PID" ] && kill -0 "$QEMU_PID" 2>/dev/null || exit 0
+                    # Check if VM is still running (backend-aware)
+                    hv_is_vm_running || exit 0
 
                     LAST_ACTIVITY=$(stat -c %Y "$ACTIVITY_FILE" 2>/dev/null || echo 0)
                     NOW=$(date +%s)
                     IDLE_SECONDS=$((NOW - LAST_ACTIVITY))
 
                     if [ "$IDLE_SECONDS" -ge "$IDLE_TIMEOUT" ]; then
-                        # Check if any containers are running via shared file
-                        # Guest-side watchdog writes container IDs to this file
                         if [ -f "$CONTAINER_STATUS_FILE" ] && [ -s "$CONTAINER_STATUS_FILE" ]; then
-                            # Containers are running - reset activity and skip shutdown
                             touch "$ACTIVITY_FILE"
                             continue
                         fi
-
-                        # No containers running - send QMP quit to gracefully stop QEMU
-                        if [ -S "$QMP_SOCKET" ]; then
-                            echo '{"execute":"qmp_capabilities"}{"execute":"quit"}' | \
-                                socat - "UNIX-CONNECT:$QMP_SOCKET" >/dev/null 2>&1 || true
-                        fi
+                        # Use backend-specific idle shutdown
+                        hv_idle_shutdown
                         rm -f "$ACTIVITY_FILE"
                         exit 0
                     fi
                 done
-            ) &
+            ) </dev/null >/dev/null 2>&1 &
+            disown $! 2>/dev/null || true
             log "DEBUG" "Started host-side idle watchdog (timeout: ${IDLE_TIMEOUT}s)"
         fi
 
-        echo "Daemon running (PID: $QEMU_PID)"
+        echo "Daemon running (PID: $HV_VM_PID)"
         echo "Socket: $DAEMON_SOCKET"
         exit 0
     else
         log "ERROR" "Daemon failed to become ready within 120 seconds"
         cat "$DAEMON_QEMU_LOG" >&2
-        kill "$QEMU_PID" 2>/dev/null || true
+        hv_destroy_vm
         rm -f "$DAEMON_PID_FILE" "$DAEMON_SOCKET"
         exit 1
     fi
 fi
 
-# For non-daemon mode with CA cert, we need virtio-9p to pass the cert
-# (kernel cmdline is too small for base64-encoded certs)
+# For non-daemon mode with CA cert, we need 9p to pass the cert
 if [ -n "$CA_CERT" ] && [ -f "$CA_CERT" ]; then
-    # Create temp share dir for CA cert
     CA_SHARE_DIR="$TEMP_DIR/ca_share"
     mkdir -p "$CA_SHARE_DIR"
     cp "$CA_CERT" "$CA_SHARE_DIR/ca.crt"
 
-    # Add virtio-9p mount for CA cert
     SHARE_TAG="${TOOL_NAME}_share"
-    QEMU_OPTS="$QEMU_OPTS -virtfs local,path=$CA_SHARE_DIR,mount_tag=$SHARE_TAG,security_model=none,readonly=on,id=cashare"
+    hv_build_9p_opts "$CA_SHARE_DIR" "$SHARE_TAG" "readonly=on"
     KERNEL_APPEND="$KERNEL_APPEND ${CMDLINE_PREFIX}_9p=1"
-    log "DEBUG" "CA certificate available via virtio-9p"
+    log "DEBUG" "CA certificate available via 9p"
 fi
 
-log "INFO" "Starting QEMU..."
-log "DEBUG" "Command: $QEMU_CMD $QEMU_OPTS -append \"$KERNEL_APPEND\""
+# Stage registry auth config (config.json / auth.json) on a dedicated read-only
+# 9p share for non-daemon and batch-import modes. Safe to call when AUTH_CONFIG
+# is empty — it no-ops. See setup_auth_share() for the security model.
+setup_auth_share
 
-# Interactive mode runs QEMU in foreground with stdio connected
+log "INFO" "Starting VM ($VCONTAINER_HYPERVISOR)..."
+
+# Interactive mode runs VM in foreground with stdio connected
 if [ "$INTERACTIVE" = "true" ]; then
-    # Check if stdin is a terminal
     if [ ! -t 0 ]; then
         log "WARN" "Interactive mode requested but stdin is not a terminal"
     fi
 
-    # Show a starting message
-    # The init script will clear this line when the container is ready
     if [ -t 1 ]; then
-        printf "\r\033[0;36m[vdkr]\033[0m Starting container... \r"
+        printf "\r\033[0;36m[${TOOL_NAME}]\033[0m Starting container... \r"
     fi
 
-    # Save terminal settings to restore later
     if [ -t 0 ]; then
         SAVED_STTY=$(stty -g)
-        # Put terminal in raw mode so Ctrl+C etc go to guest
         stty raw -echo
     fi
 
-    # Run QEMU with stdio (not in background)
-    # The -serial mon:stdio connects the serial console to our terminal
-    $QEMU_CMD $QEMU_OPTS -append "$KERNEL_APPEND"
-    QEMU_EXIT=$?
+    hv_start_vm_foreground "$KERNEL_APPEND"
+    VM_EXIT=$?
 
-    # Restore terminal settings
     if [ -t 0 ]; then
         stty "$SAVED_STTY"
     fi
 
     echo ""
-    log "INFO" "Interactive session ended (exit code: $QEMU_EXIT)"
-    exit $QEMU_EXIT
+    log "INFO" "Interactive session ended (exit code: $VM_EXIT)"
+    exit $VM_EXIT
 fi
 
-# Non-interactive mode: run QEMU in background and capture output
-QEMU_OUTPUT="$TEMP_DIR/qemu_output.txt"
-timeout $TIMEOUT $QEMU_CMD $QEMU_OPTS -append "$KERNEL_APPEND" > "$QEMU_OUTPUT" 2>&1 &
-QEMU_PID=$!
+# Non-interactive mode: run VM in background and capture output
+VM_OUTPUT="$TEMP_DIR/vm_output.txt"
+
+# Suppress kernel console messages in non-verbose mode to keep output clean
+SAVED_PRINTK=""
+if [ "$VERBOSE" != "true" ] && [ -w /proc/sys/kernel/printk ]; then
+    SAVED_PRINTK=$(cat /proc/sys/kernel/printk | awk '{print $1}')
+    echo 1 > /proc/sys/kernel/printk
+fi
+
+hv_start_vm_background "$KERNEL_APPEND" "$VM_OUTPUT" "$TIMEOUT"
 
 # Monitor for completion
 COMPLETE=false
 for i in $(seq 1 $TIMEOUT); do
-    if [ ! -d "/proc/$QEMU_PID" ]; then
-        log "DEBUG" "QEMU ended after $i seconds"
+    if ! hv_is_vm_running; then
+        log "DEBUG" "VM ended after $i seconds"
         break
     fi
 
     # Check for completion markers based on output type
     case "$OUTPUT_TYPE" in
         text)
-            if grep -q "===OUTPUT_END===" "$QEMU_OUTPUT" 2>/dev/null; then
+            if grep -q "===OUTPUT_END===" "$VM_OUTPUT" 2>/dev/null; then
                 COMPLETE=true
                 break
             fi
             ;;
         tar)
-            if grep -q "===TAR_END===" "$QEMU_OUTPUT" 2>/dev/null; then
+            if grep -q "===TAR_END===" "$VM_OUTPUT" 2>/dev/null; then
                 COMPLETE=true
                 break
             fi
             ;;
         storage)
-            # Check for both console (STORAGE_END) and virtio-9p (9P_STORAGE_DONE) markers
-            if grep -qE "===STORAGE_END===|===9P_STORAGE_DONE===" "$QEMU_OUTPUT" 2>/dev/null; then
+            if grep -qE "===STORAGE_END===|===9P_STORAGE_DONE===" "$VM_OUTPUT" 2>/dev/null; then
                 COMPLETE=true
                 break
             fi
             ;;
     esac
 
-    # Check for error
-    if grep -q "===ERROR===" "$QEMU_OUTPUT" 2>/dev/null; then
-        log "ERROR" "Error in QEMU:"
-        grep -A10 "===ERROR===" "$QEMU_OUTPUT"
+    if grep -q "===ERROR===" "$VM_OUTPUT" 2>/dev/null; then
+        log "ERROR" "Error in VM:"
+        grep -A10 "===ERROR===" "$VM_OUTPUT"
         break
     fi
 
-    # Progress indicator
     if [ $((i % 30)) -eq 0 ]; then
-        if grep -q "Docker daemon is ready" "$QEMU_OUTPUT" 2>/dev/null; then
+        if grep -q "Docker daemon is ready" "$VM_OUTPUT" 2>/dev/null; then
             log "INFO" "Docker is running, executing command..."
-        elif grep -q "Starting Docker" "$QEMU_OUTPUT" 2>/dev/null; then
+        elif grep -q "Starting Docker" "$VM_OUTPUT" 2>/dev/null; then
             log "INFO" "Docker is starting..."
         fi
     fi
@@ -1562,38 +1674,50 @@ for i in $(seq 1 $TIMEOUT); do
     sleep 1
 done
 
-# Wait for QEMU to exit gracefully (poweroff from inside flushes disks properly)
-# Only kill if it hangs after seeing completion marker
-if [ "$COMPLETE" = "true" ] && [ -d "/proc/$QEMU_PID" ]; then
-    log "DEBUG" "Waiting for QEMU to complete graceful shutdown..."
-    # Give QEMU up to 30 seconds to poweroff after command completes
-    for wait_i in $(seq 1 30); do
-        if [ ! -d "/proc/$QEMU_PID" ]; then
-            log "DEBUG" "QEMU shutdown complete"
-            break
-        fi
-        sleep 1
-    done
+# If VM ended before markers were detected, wait for console to flush
+if [ "$COMPLETE" = "false" ] && ! hv_is_vm_running; then
+    sleep 2
+    case "$OUTPUT_TYPE" in
+        text)
+            grep -q "===OUTPUT_END===" "$VM_OUTPUT" 2>/dev/null && COMPLETE=true
+            ;;
+        tar)
+            grep -q "===TAR_END===" "$VM_OUTPUT" 2>/dev/null && COMPLETE=true
+            ;;
+        storage)
+            grep -qE "===STORAGE_END===|===9P_STORAGE_DONE===" "$VM_OUTPUT" 2>/dev/null && COMPLETE=true
+            ;;
+    esac
+    [ "$COMPLETE" = "true" ] && log "DEBUG" "Markers found after VM exit"
 fi
 
-# Force kill QEMU only if still running after grace period
-if [ -d "/proc/$QEMU_PID" ]; then
-    log "WARN" "QEMU still running, forcing termination..."
-    kill $QEMU_PID 2>/dev/null || true
-    wait $QEMU_PID 2>/dev/null || true
+# Wait for VM to exit gracefully (poweroff from inside flushes disks properly)
+if [ "$COMPLETE" = "true" ] && hv_is_vm_running; then
+    log "DEBUG" "Waiting for VM to complete graceful shutdown..."
+    hv_wait_vm_exit 30 && log "DEBUG" "VM shutdown complete"
+fi
+
+# Force kill VM only if still running after grace period
+if hv_is_vm_running; then
+    hv_stop_vm
+fi
+
+# Restore kernel console messages
+if [ -n "$SAVED_PRINTK" ]; then
+    echo "$SAVED_PRINTK" > /proc/sys/kernel/printk
 fi
 
 # Extract results
 if [ "$COMPLETE" = "true" ]; then
     # Get exit code
-    EXIT_CODE=$(grep -oP '===EXIT_CODE=\K[0-9]+' "$QEMU_OUTPUT" | head -1)
+    EXIT_CODE=$(sed -n 's/.*===EXIT_CODE=\([0-9]*\).*/\1/p' "$VM_OUTPUT" | head -1)
     EXIT_CODE="${EXIT_CODE:-0}"
 
     case "$OUTPUT_TYPE" in
         text)
             log "INFO" "=== Command Output ==="
             # Use awk for precise extraction between markers
-            awk '/===OUTPUT_START===/{capture=1; next} /===OUTPUT_END===/{capture=0} capture' "$QEMU_OUTPUT"
+            awk '/===OUTPUT_START===/{capture=1; next} /===OUTPUT_END===/{capture=0} capture' "$VM_OUTPUT"
             log "INFO" "=== Exit Code: $EXIT_CODE ==="
             ;;
 
@@ -1601,7 +1725,7 @@ if [ "$COMPLETE" = "true" ]; then
             log "INFO" "Extracting tar output..."
             # Use awk for precise extraction between markers
             # Strip ANSI escape codes and non-base64 characters from serial console output
-            awk '/===TAR_START===/{capture=1; next} /===TAR_END===/{capture=0} capture' "$QEMU_OUTPUT" | \
+            awk '/===TAR_START===/{capture=1; next} /===TAR_END===/{capture=0} capture' "$VM_OUTPUT" | \
                 tr -d '\r' | sed 's/\x1b\[[0-9;]*m//g' | tr -cd 'A-Za-z0-9+/=\n' | base64 -d > "$OUTPUT_FILE" 2>"${TEMP_DIR}/b64_errors.txt"
 
             if [ -s "${TEMP_DIR}/b64_errors.txt" ]; then
@@ -1634,7 +1758,7 @@ if [ "$COMPLETE" = "true" ]; then
                 # 3. sed: remove ANSI escape codes
                 # 4. grep -v: remove kernel log messages (lines starting with [ followed by timestamp)
                 # 5. tr -cd: keep only valid base64 characters
-                awk '/===STORAGE_START===/{capture=1; next} /===STORAGE_END===/{capture=0} capture' "$QEMU_OUTPUT" | \
+                awk '/===STORAGE_START===/{capture=1; next} /===STORAGE_END===/{capture=0} capture' "$VM_OUTPUT" | \
                     tr -d '\r' | \
                     sed 's/\x1b\[[0-9;]*m//g' | \
                     grep -v '^\[[[:space:]]*[0-9]' | \
@@ -1675,11 +1799,12 @@ if [ "$COMPLETE" = "true" ]; then
     exit "${EXIT_CODE:-0}"
 else
     log "ERROR" "Command execution failed or timed out"
-    log "ERROR" "QEMU output saved to: $QEMU_OUTPUT"
+    KEEP_TEMP=true
+    log "ERROR" "VM output saved to: $VM_OUTPUT"
 
     if [ "$VERBOSE" = "true" ]; then
-        log "DEBUG" "=== Last 50 lines of QEMU output ==="
-        tail -50 "$QEMU_OUTPUT"
+        log "DEBUG" "=== Last 50 lines of VM output ==="
+        tail -50 "$VM_OUTPUT"
     fi
 
     exit 1

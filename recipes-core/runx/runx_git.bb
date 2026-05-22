@@ -1,6 +1,10 @@
 HOMEPAGE = "https://github.com/lf-edge/runx"
-SUMMARY = "runx stuff"
-DESCRIPTION = "Xen Runtime for OCI"
+SUMMARY = "runx stuff (DEPRECATED - use vxn instead)"
+DESCRIPTION = "Xen Runtime for OCI. \
+    DEPRECATED: runx is unmaintained (upstream dormant since 2022). \
+    Use 'vxn' instead, which provides the same Xen DomU container \
+    functionality using the modern vcontainer infrastructure with \
+    pluggable hypervisor backends, daemon mode, and vexpose API exposure."
 
 SRCREV_runx = "edc9350a79ede0365066c9743080e3dc6430d602"
 

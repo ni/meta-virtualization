@@ -3,14 +3,14 @@ HOMEPAGE = "https://virt-manager.org/"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://COPYING;md5=b234ee4d69f5fce4486a80fdaf4a4263"
 DEPENDS += "python3-docutils-native python3-pylint"
-SRCREV = "35ad9057fef319046ad1348097e2f813a52a9021"
+SRCREV = "b2b32ccc7913bd21530b03dfa6b65e863b6896ed"
 
 SRC_URI = " \
   git://github.com/virt-manager/virt-manager;branch=main;protocol=https \
   file://0001-build-drop-man-directory.patch \
 "
 
-PV = "v5.1.0+git"
+PV = "5.1.0+git"
 
 PACKAGECONFIG ??= "gui"
 PACKAGECONFIG[gui] = ",-Dupdate-icon-cache=false -Dcompile-schemas=false,python3-pygobject"

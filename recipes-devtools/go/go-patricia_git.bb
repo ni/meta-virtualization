@@ -9,8 +9,8 @@ SRCNAME = "go-patricia"
 PKG_NAME = "github.com/tchap/${SRCNAME}"
 SRC_URI = "git://${PKG_NAME}.git;branch=master;protocol=https"
 
-SRCREV = "666120de432aea38ab06bd5c818f04f4129882c9"
-PV = "2.2.6+git"
+SRCREV = "8c5d7fa2ef98ad77bfbd2d2c3d67d4d17db0093a"
+PV = "2.3.3+git"
 
 inherit meta-virt-depreciated-warning
 

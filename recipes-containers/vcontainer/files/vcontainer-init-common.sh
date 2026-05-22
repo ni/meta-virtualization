@@ -27,6 +27,43 @@ setup_base_environment() {
 }
 
 # ============================================================================
+# Hypervisor Detection
+# ============================================================================
+
+# Detect hypervisor type and set device prefixes accordingly.
+# Must be called after /proc and /sys are mounted.
+# Sets: HV_TYPE, BLK_PREFIX, NINE_P_TRANSPORT
+detect_hypervisor() {
+    # Check kernel cmdline for explicit block prefix (set by Xen backend)
+    local cmdline_blk=""
+    for param in $(cat /proc/cmdline 2>/dev/null); do
+        case "$param" in
+            vcontainer.blk=*) cmdline_blk="${param#vcontainer.blk=}" ;;
+        esac
+    done
+
+    if [ -n "$cmdline_blk" ]; then
+        # Explicit prefix from kernel cmdline (most reliable)
+        BLK_PREFIX="$cmdline_blk"
+        if [ "$cmdline_blk" = "xvd" ]; then
+            HV_TYPE="xen"
+            NINE_P_TRANSPORT="xen"
+        else
+            HV_TYPE="qemu"
+            NINE_P_TRANSPORT="virtio"
+        fi
+    elif [ -d /proc/xen ] || grep -q "xen" /sys/hypervisor/type 2>/dev/null; then
+        HV_TYPE="xen"
+        BLK_PREFIX="xvd"
+        NINE_P_TRANSPORT="xen"
+    else
+        HV_TYPE="qemu"
+        BLK_PREFIX="vd"
+        NINE_P_TRANSPORT="virtio"
+    fi
+}
+
+# ============================================================================
 # Filesystem Mounts
 # ============================================================================
 
@@ -39,6 +76,9 @@ mount_base_filesystems() {
     # Mount devpts for pseudo-terminals (needed for interactive mode)
     mkdir -p /dev/pts
     mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts
+
+    # Detect hypervisor type now that /proc and /sys are available
+    detect_hypervisor
 
     # Enable IP forwarding (container runtimes check this)
     echo 1 > /proc/sys/net/ipv4/ip_forward
@@ -116,6 +156,7 @@ parse_cmdline() {
     RUNTIME_INTERACTIVE="0"
     RUNTIME_DAEMON="0"
     RUNTIME_9P="0"  # virtio-9p available for fast I/O
+    RUNTIME_AUTH="0"  # registry auth config (config.json / auth.json) available on dedicated 9p share
     RUNTIME_IDLE_TIMEOUT="1800"  # Default: 30 minutes
 
     for param in $(cat /proc/cmdline); do
@@ -146,6 +187,9 @@ parse_cmdline() {
                 ;;
             ${VCONTAINER_RUNTIME_PREFIX}_9p=*)
                 RUNTIME_9P="${param#${VCONTAINER_RUNTIME_PREFIX}_9p=}"
+                ;;
+            ${VCONTAINER_RUNTIME_PREFIX}_auth=*)
+                RUNTIME_AUTH="${param#${VCONTAINER_RUNTIME_PREFIX}_auth=}"
                 ;;
         esac
     done
@@ -178,29 +222,24 @@ detect_disks() {
     log "Waiting for block devices..."
     sleep 2
 
-    log "Block devices:"
-    [ "$QUIET_BOOT" = "0" ] && ls -la /dev/vd* 2>/dev/null || log "No /dev/vd* devices"
+    log "Block devices (${HV_TYPE:-qemu}, /dev/${BLK_PREFIX}*):"
+    [ "$QUIET_BOOT" = "0" ] && ls -la /dev/${BLK_PREFIX}* 2>/dev/null || log "No /dev/${BLK_PREFIX}* devices"
 
     # Determine which disk is input and which is state
-    # Drive layout (rootfs.img is always /dev/vda, mounted by preinit as /):
-    #   /dev/vda = rootfs.img (already mounted as /)
-    #   /dev/vdb = input (if present)
-    #   /dev/vdc = state (if both input and state present)
-    #   /dev/vdb = state (if only state, no input)
+    # Drive layout (rootfs is always the first block device, mounted by preinit as /):
+    #   QEMU: /dev/vda, /dev/vdb, /dev/vdc
+    #   Xen:  /dev/xvda, /dev/xvdb, /dev/xvdc
 
     INPUT_DISK=""
     STATE_DISK=""
 
     if [ "$RUNTIME_INPUT" != "none" ] && [ "$RUNTIME_STATE" = "disk" ]; then
-        # Both present: rootfs=vda, input=vdb, state=vdc
-        INPUT_DISK="/dev/vdb"
-        STATE_DISK="/dev/vdc"
+        INPUT_DISK="/dev/${BLK_PREFIX}b"
+        STATE_DISK="/dev/${BLK_PREFIX}c"
     elif [ "$RUNTIME_STATE" = "disk" ]; then
-        # Only state: rootfs=vda, state=vdb
-        STATE_DISK="/dev/vdb"
+        STATE_DISK="/dev/${BLK_PREFIX}b"
     elif [ "$RUNTIME_INPUT" != "none" ]; then
-        # Only input: rootfs=vda, input=vdb
-        INPUT_DISK="/dev/vdb"
+        INPUT_DISK="/dev/${BLK_PREFIX}b"
     fi
 }
 
@@ -228,6 +267,56 @@ mount_input_disk() {
 }
 
 # ============================================================================
+# Registry auth share (docker config.json / podman auth.json)
+# ============================================================================
+# The host stages a validated credential file on a *dedicated* read-only 9p
+# share tagged "${VCONTAINER_RUNTIME_NAME}_auth" (e.g. "vdkr_auth" or
+# "vpdmn_auth"). That tag is separate from the general ${VCONTAINER_SHARE_NAME}
+# used for input/output so credentials can't leak into storage.tar outputs or
+# be overwritten by daemon_send_with_input.
+#
+# We mount read-only, nosuid, nodev, noexec at /mnt/auth. Callers are expected
+# to copy the credential file into the runtime's canonical location with
+# restrictive permissions and then call unmount_auth_share() so the guest
+# filesystem no longer has an open reference to the host-side file.
+
+AUTH_SHARE_TAG=""
+AUTH_SHARE_MOUNT="/mnt/auth"
+
+mount_auth_share() {
+    if [ "$RUNTIME_AUTH" != "1" ]; then
+        return 1
+    fi
+
+    AUTH_SHARE_TAG="${VCONTAINER_RUNTIME_NAME}_auth"
+    mkdir -p "$AUTH_SHARE_MOUNT"
+
+    # trans/version/cache match the existing 9p share mount. Add:
+    #   ro      - guest can't mutate the host-side staging directory
+    #   nosuid  - no setuid binaries can be executed from the share
+    #   nodev   - no device nodes honoured even if crafted
+    #   noexec  - no code can execute from the share (auth.json is pure data)
+    if mount -t 9p \
+        -o trans=${NINE_P_TRANSPORT},version=9p2000.L,cache=none,ro,nosuid,nodev,noexec \
+        "$AUTH_SHARE_TAG" "$AUTH_SHARE_MOUNT" 2>/dev/null; then
+        log "Mounted auth 9p share at $AUTH_SHARE_MOUNT (tag: $AUTH_SHARE_TAG, ro)"
+        return 0
+    fi
+
+    log "WARNING: Could not mount auth 9p share ($AUTH_SHARE_TAG)"
+    RUNTIME_AUTH="0"
+    return 1
+}
+
+unmount_auth_share() {
+    if mountpoint -q "$AUTH_SHARE_MOUNT" 2>/dev/null; then
+        umount "$AUTH_SHARE_MOUNT" 2>/dev/null || \
+            umount -l "$AUTH_SHARE_MOUNT" 2>/dev/null || true
+    fi
+    rmdir "$AUTH_SHARE_MOUNT" 2>/dev/null || true
+}
+
+# ============================================================================
 # Network Configuration
 # ============================================================================
 
@@ -250,30 +339,56 @@ configure_networking() {
             # Bring up the interface
             ip link set "$NET_IFACE" up
 
-            # QEMU slirp provides:
-            #   Guest IP: 10.0.2.15/24
-            #   Gateway:  10.0.2.2
-            #   DNS:      10.0.2.3
-            ip addr add 10.0.2.15/24 dev "$NET_IFACE"
-            ip route add default via 10.0.2.2
+            if [ "$HV_TYPE" = "xen" ]; then
+                # Xen bridge networking: use DHCP or static config
+                # Try DHCP first if udhcpc is available
+                if command -v udhcpc >/dev/null 2>&1; then
+                    log "Requesting IP via DHCP (Xen bridge)..."
+                    udhcpc -i "$NET_IFACE" -t 5 -T 3 -q 2>/dev/null || {
+                        log "DHCP failed, using static fallback"
+                        ip addr add 10.0.0.15/24 dev "$NET_IFACE"
+                        ip route add default via 10.0.0.1
+                    }
+                else
+                    # Static fallback for Xen bridge
+                    ip addr add 10.0.0.15/24 dev "$NET_IFACE"
+                    ip route add default via 10.0.0.1
+                fi
+            else
+                # QEMU slirp provides:
+                #   Guest IP: 10.0.2.15/24
+                #   Gateway:  10.0.2.2
+                #   DNS:      10.0.2.3
+                ip addr add 10.0.2.15/24 dev "$NET_IFACE"
+                ip route add default via 10.0.2.2
+            fi
 
             # Configure DNS
             mkdir -p /etc
             rm -f /etc/resolv.conf
-            cat > /etc/resolv.conf << 'DNSEOF'
+            if [ "$HV_TYPE" = "xen" ]; then
+                cat > /etc/resolv.conf << 'DNSEOF'
+nameserver 8.8.8.8
+nameserver 1.1.1.1
+DNSEOF
+            else
+                cat > /etc/resolv.conf << 'DNSEOF'
 nameserver 10.0.2.3
 nameserver 8.8.8.8
 nameserver 1.1.1.1
 DNSEOF
+            fi
 
             sleep 1
 
             # Verify connectivity
+            local gw_ip
+            gw_ip=$(ip route | awk '/default/{print $3}' | head -n 1)
             log "Testing network connectivity..."
-            if ping -c 1 -W 3 10.0.2.2 >/dev/null 2>&1; then
-                log "  Gateway (10.0.2.2): OK"
+            if [ -n "$gw_ip" ] && ping -c 1 -W 3 "$gw_ip" >/dev/null 2>&1; then
+                log "  Gateway ($gw_ip): OK"
             else
-                log "  Gateway (10.0.2.2): FAILED"
+                log "  Gateway: FAILED"
             fi
 
             if ping -c 1 -W 3 8.8.8.8 >/dev/null 2>&1; then
@@ -282,7 +397,9 @@ DNSEOF
                 log "  External (8.8.8.8): FAILED (may be filtered)"
             fi
 
-            log "Network configured: $NET_IFACE (10.0.2.15)"
+            local my_ip
+            my_ip=$(ip -4 addr show "$NET_IFACE" 2>/dev/null | awk '/inet /{print $2}' | head -n 1)
+            log "Network configured: $NET_IFACE ($my_ip)"
             [ "$QUIET_BOOT" = "0" ] && ip addr show "$NET_IFACE"
             [ "$QUIET_BOOT" = "0" ] && ip route
             [ "$QUIET_BOOT" = "0" ] && cat /etc/resolv.conf
@@ -325,11 +442,11 @@ run_daemon_mode() {
 
     # Mount virtio-9p shared directory for file I/O
     mkdir -p /mnt/share
-    MOUNT_ERR=$(mount -t 9p -o trans=virtio,version=9p2000.L,cache=none ${VCONTAINER_SHARE_NAME} /mnt/share 2>&1)
+    MOUNT_ERR=$(mount -t 9p -o trans=${NINE_P_TRANSPORT},version=9p2000.L,cache=none ${VCONTAINER_SHARE_NAME} /mnt/share 2>&1)
     if [ $? -eq 0 ]; then
-        log "Mounted virtio-9p share at /mnt/share"
+        log "Mounted 9p share at /mnt/share (transport: ${NINE_P_TRANSPORT})"
     else
-        log "WARNING: Could not mount virtio-9p share: $MOUNT_ERR"
+        log "WARNING: Could not mount 9p share: $MOUNT_ERR"
         log "Available filesystems:"
         cat /proc/filesystems 2>/dev/null | head -20
     fi
@@ -644,7 +761,7 @@ graceful_shutdown() {
 
     # Final sync and flush
     sync
-    for dev in /dev/vd*; do
+    for dev in /dev/${BLK_PREFIX}*; do
         [ -b "$dev" ] && blockdev --flushbufs "$dev" 2>/dev/null || true
     done
     sync

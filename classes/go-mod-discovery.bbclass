@@ -32,6 +32,10 @@
 #   bitbake <recipe> -c clean_discovery
 #       Remove the persistent discovery cache
 #
+#   bitbake <recipe> -c update_license_hashes
+#       Regenerate the bundled license-hashes.csv from COMMON_LICENSE_DIR
+#       Run after OE-core upgrades to keep standalone CSV current
+#
 # CONFIGURATION:
 #
 # Required (must be set by recipe):
@@ -73,6 +77,9 @@
 #
 #   GO_MOD_DISCOVERY_RECIPEDIR    - Output directory for generated .inc files
 #                                   Default: "${FILE_DIRNAME}" (recipe's directory)
+#
+#   GO_MOD_DISCOVERY_SKIP_LICENSES - Set to "1" to skip license scanning
+#                                    Default: "" (scan enabled)
 #
 # WORKFLOW EXAMPLES:
 #
@@ -121,6 +128,16 @@ GO_MOD_DISCOVERY_RECIPEDIR ?= "${FILE_DIRNAME}"
 # Set to "1" to skip verification on retries after initial discovery
 # Usage: GO_MOD_DISCOVERY_SKIP_VERIFY = "1" in local.conf or recipe
 GO_MOD_DISCOVERY_SKIP_VERIFY ?= ""
+
+# Skip license scanning during generation
+# Set to "1" to bypass license scanning (default: scan licenses)
+# Usage: GO_MOD_DISCOVERY_SKIP_LICENSES = "1" in local.conf or recipe
+GO_MOD_DISCOVERY_SKIP_LICENSES ?= ""
+
+# Modules to exclude from git:// generation (space-separated prefixes)
+# Excluded modules must be fetched via gomod:// in the recipe's SRC_URI
+# Usage: GO_MOD_VCS_EXCLUDE = "github.com/vtolstov/go-ioctl"
+GO_MOD_VCS_EXCLUDE ?= ""
 
 # Empty default for TAGS if not set by recipe (avoids undefined variable errors)
 TAGS ?= ""
@@ -396,12 +413,24 @@ Or run 'bitbake ${PN} -c show_upgrade_commands' to see manual options."
         SKIP_VERIFY_FLAG="--skip-verify"
     fi
 
+    EXCLUDE_FLAGS=""
+    for mod in ${GO_MOD_VCS_EXCLUDE}; do
+        EXCLUDE_FLAGS="${EXCLUDE_FLAGS} --exclude-module ${mod}"
+    done
+
+    LICENSE_FLAGS=""
+    if [ "${GO_MOD_DISCOVERY_SKIP_LICENSES}" != "1" ]; then
+        LICENSE_FLAGS="--scan-licenses --common-license-dir ${COMMON_LICENSE_DIR} --discovery-cache ${GO_MOD_DISCOVERY_DIR}/cache"
+    fi
+
     python3 "${FETCHER_SCRIPT}" \
         --discovered-modules "${GO_MOD_DISCOVERY_MODULES_JSON}" \
         --git-repo "${GO_MOD_DISCOVERY_GIT_REPO}" \
         --git-ref "${GO_MOD_DISCOVERY_GIT_REF}" \
         --recipedir "${GO_MOD_DISCOVERY_RECIPEDIR}" \
-        ${SKIP_VERIFY_FLAG}
+        ${SKIP_VERIFY_FLAG} \
+        ${EXCLUDE_FLAGS} \
+        ${LICENSE_FLAGS}
 
     if [ $? -eq 0 ]; then
         echo ""
@@ -411,6 +440,7 @@ Or run 'bitbake ${PN} -c show_upgrade_commands' to see manual options."
         echo "Files generated in: ${GO_MOD_DISCOVERY_RECIPEDIR}"
         echo "  - go-mod-git.inc"
         echo "  - go-mod-cache.inc"
+        echo "  - go-mod-licenses.inc (if license scanning enabled)"
         echo ""
         echo "You can now build the recipe:"
         echo "  bitbake ${PN}"
@@ -423,7 +453,7 @@ Or run 'bitbake ${PN} -c show_upgrade_commands' to see manual options."
 addtask generate_modules
 do_generate_modules[nostamp] = "1"
 do_generate_modules[vardeps] += "GO_MOD_DISCOVERY_MODULES_JSON GO_MOD_DISCOVERY_GIT_REPO \
-    GO_MOD_DISCOVERY_GIT_REF GO_MOD_DISCOVERY_RECIPEDIR"
+    GO_MOD_DISCOVERY_GIT_REF GO_MOD_DISCOVERY_RECIPEDIR GO_MOD_DISCOVERY_SKIP_LICENSES"
 do_generate_modules[postfuncs] = "do_show_hybrid_recommendation"
 
 # Show hybrid conversion recommendations after VCS generation
@@ -616,12 +646,22 @@ python do_show_upgrade_commands() {
     bb.plain(f"    --git-ref {git_ref} \\")
     bb.plain(f"    --recipedir {recipedir}")
     bb.plain("")
+    bb.plain("Add --scan-licenses to also generate go-mod-licenses.inc:")
+    bb.plain("")
+    bb.plain(f"  {fetcher_script} \\")
+    bb.plain(f"    --discovered-modules {modules_json} \\")
+    bb.plain(f"    --git-repo {git_repo} \\")
+    bb.plain(f"    --git-ref {git_ref} \\")
+    bb.plain(f"    --recipedir {recipedir} \\")
+    bb.plain(f"    --scan-licenses --discovery-cache {discovery_dir}/cache")
+    bb.plain("")
     bb.plain("")
     bb.plain("Generated files:")
     bb.plain("-" * 70)
     bb.plain("")
-    bb.plain("  go-mod-git.inc   - SRC_URI entries for fetching module git repos")
-    bb.plain("  go-mod-cache.inc - Module path mappings for cache creation")
+    bb.plain("  go-mod-git.inc      - SRC_URI entries for fetching module git repos")
+    bb.plain("  go-mod-cache.inc    - Module path mappings for cache creation")
+    bb.plain("  go-mod-licenses.inc - LICENSE and LIC_FILES_CHKSUM for dependencies")
     bb.plain("")
     bb.plain("=" * 70)
     bb.plain("")
@@ -631,3 +671,54 @@ addtask show_upgrade_commands
 do_show_upgrade_commands[nostamp] = "1"
 do_show_upgrade_commands[vardeps] += "GO_MOD_DISCOVERY_GIT_REPO GO_MOD_DISCOVERY_GIT_REF \
     GO_MOD_DISCOVERY_RECIPEDIR GO_MOD_DISCOVERY_DIR GO_MOD_DISCOVERY_MODULES_JSON"
+
+# =============================================================================
+# TASK: do_update_license_hashes - Regenerate bundled license hash CSV
+# =============================================================================
+# Regenerates scripts/data/license-hashes.csv from ${COMMON_LICENSE_DIR}.
+# Run after OE-core upgrades to keep the bundled CSV current for standalone users.
+#
+# Usage: bitbake <any-go-recipe> -c update_license_hashes
+#
+python do_update_license_hashes() {
+    import subprocess
+    from pathlib import Path
+
+    common_license_dir = d.getVar('COMMON_LICENSE_DIR')
+    if not common_license_dir or not os.path.isdir(common_license_dir):
+        bb.fatal(f"COMMON_LICENSE_DIR not found: {common_license_dir}")
+
+    # Find the generator script and output path
+    layerdir = None
+    for layer in d.getVar('BBLAYERS').split():
+        candidate = os.path.join(layer, 'scripts', 'generate-license-hashes.py')
+        if os.path.exists(candidate):
+            layerdir = layer
+            break
+
+    if not layerdir:
+        bb.fatal("Could not find generate-license-hashes.py in any layer")
+
+    script = os.path.join(layerdir, 'scripts', 'generate-license-hashes.py')
+    output = os.path.join(layerdir, 'scripts', 'data', 'license-hashes.csv')
+
+    bb.plain(f"Regenerating {output} from {common_license_dir}")
+
+    result = subprocess.run(
+        ['python3', script, common_license_dir],
+        capture_output=True, text=True, timeout=60
+    )
+
+    if result.returncode != 0:
+        bb.fatal(f"generate-license-hashes.py failed: {result.stderr}")
+
+    os.makedirs(os.path.dirname(output), exist_ok=True)
+    with open(output, 'w') as f:
+        f.write(result.stdout)
+
+    lines = [l for l in result.stdout.splitlines() if l and not l.startswith('#')]
+    bb.plain(f"Generated {len(lines)} license hash entries in {output}")
+}
+
+addtask update_license_hashes
+do_update_license_hashes[nostamp] = "1"

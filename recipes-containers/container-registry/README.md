@@ -473,7 +473,6 @@ This installs:
 | File | Description |
 |------|-------------|
 | `container-registry-index.bb` | Generates helper script with baked-in paths |
-| `container-registry-populate.bb` | Alternative bitbake-driven push |
 | `container-registry-ca.bb` | Target package for CA certificate (secure mode) |
 | `container-oci-registry-config.bb` | OCI tools config (Podman/Skopeo/Buildah/CRI-O) |
 | `docker-registry-config.bb` | Docker daemon config |

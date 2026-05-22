@@ -50,7 +50,7 @@ RDEPENDS:${PN}-dev = ""
 RRECOMMENDS:${PN} = " \
     qemu \
     ${@bb.utils.contains('DISTRO_FEATURES', 'vmsep', 'qemu-x86_64 qemu-i386', '', d)} \
-    ${@bb.utils.contains('XEN_TARGET_ARCH', 'x86_64', 'seabios ipxe vgabios', '', d)} \
+    ${@bb.utils.contains('XEN_TARGET_ARCH', 'x86_64', 'seabios ipxe', '', d)} \
     ${@bb.utils.contains('PACKAGECONFIG', 'externalblktap', '', '${BLKTAP_RRECOMMENDS}', d)} \
     ${PN}-flask \
     ${PN}-hvmloader \
@@ -793,6 +793,7 @@ EXTRA_OECONF += " \
     --with-initddir=${INIT_D_DIR} \
     --with-sysconfig-leaf-dir=default \
     --with-system-qemu=${bindir}/${QEMU_SYSTEM} \
+    --disable-rombios \
     "
 
 do_configure() {

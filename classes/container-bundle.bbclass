@@ -282,7 +282,10 @@ python __anonymous() {
 
     # Remote containers are fetched during do_fetch (network is allowed there).
     # extend_recipe_sysroot populates the native sysroot so skopeo is available.
+    # Explicit do_fetch depends ensures skopeo-native is built before our
+    # do_fetch runs (DEPENDS alone only gates do_prepare_recipe_sysroot).
     if remote_urls:
+        d.appendVarFlag('do_fetch', 'depends', ' skopeo-native:do_populate_sysroot')
         d.appendVarFlag('do_fetch', 'prefuncs', ' extend_recipe_sysroot')
         d.appendVarFlag('do_fetch', 'postfuncs', ' do_fetch_containers')
 

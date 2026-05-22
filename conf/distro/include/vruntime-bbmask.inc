@@ -35,7 +35,6 @@ BBMASK += "meta-virtualization/recipes-extended/upx/"
 BBMASK += "meta-virtualization/recipes-extended/uxen/"
 BBMASK += "meta-virtualization/recipes-extended/ipxe/"
 BBMASK += "meta-virtualization/recipes-extended/diod/"
-BBMASK += "meta-virtualization/recipes-extended/libibverbs/"
 BBMASK += "meta-virtualization/recipes-extended/virtiofsd/"
 
 # ---------------------------------------------------------------------------

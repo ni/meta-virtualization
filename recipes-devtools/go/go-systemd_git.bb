@@ -6,11 +6,11 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=19cbd64715b51267a47bf3750cc6a8a5"
 
 SRCNAME = "systemd"
 
-PKG_NAME = "github.com/coreos/go-${SRCNAME}"
-SRC_URI = "git://${PKG_NAME}.git;branch=main;protocol=https"
+PKG_NAME = "github.com/coreos/go-${SRCNAME}/v22"
+SRC_URI = "git://github.com/coreos/go-${SRCNAME}.git;branch=main;protocol=https"
 
-SRCREV = "b4a58d95188dd092ae20072bac14cece0e67c388"
-PV = "4+git"
+SRCREV = "4dc4ee60b8394d431f19a3c599040ef758884a27"
+PV = "22.7.0+git"
 
 RDEPENDS:${PN} += "bash"
 

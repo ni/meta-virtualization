@@ -2,17 +2,21 @@ DESCRIPTION = "A small package for building command line apps in Go"
 HOMEPAGE = "https://github.com/codegangsta/cli"
 SECTION = "devel/go"
 LICENSE = "MIT"
-LIC_FILES_CHKSUM = "file://LICENSE;md5=ed9b539ed65d73926f30ff1f1587dc44"
+LIC_FILES_CHKSUM = "file://LICENSE;md5=51992c80b05795f59c22028d39f9b74c"
 
 SRCNAME = "cli"
 
-PKG_NAME = "github.com/codegangsta/${SRCNAME}"
-SRC_URI = "git://${PKG_NAME}.git;branch=main;protocol=https"
+PKG_NAME = "github.com/urfave/${SRCNAME}/v2"
+SRC_URI = "git://github.com/urfave/${SRCNAME}.git;branch=v2-maint;protocol=https"
 
-SRCREV = "27ecc97192df1bf053a22b04463f2b51b8b8373e"
-PV = "1.1.0+git"
+SRCREV = "19b951ab78929023a9a670722b26ffb1d67c733a"
+PV = "2.27.7+git"
 
 inherit meta-virt-depreciated-warning
+
+# Source-only package, no compilation needed
+do_compile[noexec] = "1"
+do_configure[noexec] = "1"
 
 do_install() {
 	install -d ${D}${prefix}/local/go/src/${PKG_NAME}

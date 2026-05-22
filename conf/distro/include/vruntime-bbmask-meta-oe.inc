@@ -30,19 +30,18 @@ BBMASK += "meta-oe/recipes-(?!devtools|extended|support)"
 BBMASK += "meta-networking/recipes-(?!filter|support)"
 
 # ---------------------------------------------------------------------------
-# meta-filesystems: entire layer (0 recipes in dependency graph)
+# Entire layers with 0 recipes in the dependency graph.
+# Clear BBFILE_COLLECTIONS entries for fully-masked layers so BitBake
+# does not warn about zero files matching BBFILE_PATTERN.
+# The layers remain in bblayers.conf (shared with main build) but
+# contribute no recipes to vruntime/vcontainer multiconfigs.
 # ---------------------------------------------------------------------------
 BBMASK += "meta-filesystems/"
-
-# ---------------------------------------------------------------------------
-# meta-python: entire layer (0 recipes in dependency graph)
-# ---------------------------------------------------------------------------
 BBMASK += "meta-python/"
-
-# ---------------------------------------------------------------------------
-# meta-webserver: entire layer (0 recipes in dependency graph)
-# ---------------------------------------------------------------------------
 BBMASK += "meta-webserver/"
+# Warning suppression for these fully-masked layers is in meta-virt-host.conf
+# (BBFILE_PATTERN_IGNORE_EMPTY) because BitBake checks the base datastore,
+# not per-multiconfig datastores.
 
 # ---------------------------------------------------------------------------
 # Orphaned bbappends in other layers (base recipes masked above)

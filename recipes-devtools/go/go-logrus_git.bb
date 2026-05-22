@@ -9,14 +9,15 @@ SRCNAME = "logrus"
 PKG_NAME = "github.com/sirupsen/${SRCNAME}"
 SRC_URI = "git://${PKG_NAME};branch=master;protocol=https"
 
-SRCREV = "d26492970760ca5d33129d2d799e34be5c4782eb"
-PV = "0.11.0+git"
+SRCREV = "a29884b9be3dc22c18338c0fe5a51d23e69731e4"
+PV = "1.9.4+git"
 
 inherit meta-virt-depreciated-warning
 
 do_install() {
 	install -d ${D}${prefix}/local/go/src/${PKG_NAME}
 	cp -r ${S}/* ${D}${prefix}/local/go/src/${PKG_NAME}/
+	rm -rf ${D}${prefix}/local/go/src/${PKG_NAME}/travis
 }
 
 SYSROOT_PREPROCESS_FUNCS += "go_logrus_sysroot_preprocess"

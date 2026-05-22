@@ -611,7 +611,7 @@ IMAGE_CMD:oci() {
                             oci_dst_file="$image_bundle_name/rootfs$oci_rel_path"
                             if [ ! -e "$oci_dst_file" ]; then
                                 mkdir -p "$(dirname "$oci_dst_file")"
-                                cp -a "$oci_src_file" "$oci_dst_file"
+                                cp -a --no-preserve=ownership "$oci_src_file" "$oci_dst_file"
                                 oci_delta_copied=$(expr $oci_delta_copied + 1)
                             else
                                 oci_delta_skipped=$(expr $oci_delta_skipped + 1)
@@ -638,7 +638,7 @@ IMAGE_CMD:oci() {
                         oci_dst_file="$image_bundle_name/rootfs$oci_file"
                         if [ ! -e "$oci_dst_file" ]; then
                             mkdir -p "$(dirname "$oci_dst_file")"
-                            cp -a "${IMAGE_ROOTFS}$oci_file" "$oci_dst_file"
+                            cp -a --no-preserve=ownership "${IMAGE_ROOTFS}$oci_file" "$oci_dst_file"
                             bbnote "OCI: Added file $oci_file"
                         else
                             bbnote "OCI: Skipped file $oci_file (already in bundle)"
@@ -657,7 +657,7 @@ IMAGE_CMD:oci() {
                     oci_host_dst="${oci_host_pair##*:}"
                     if [ -e "$oci_host_src" ]; then
                         mkdir -p "$image_bundle_name/rootfs$(dirname $oci_host_dst)"
-                        cp -a "$oci_host_src" "$image_bundle_name/rootfs$oci_host_dst"
+                        cp -a --no-preserve=ownership "$oci_host_src" "$image_bundle_name/rootfs$oci_host_dst"
                         bbnote "OCI: Added from host: $oci_host_src -> $oci_host_dst"
                     else
                         bbfatal "OCI: Host path not found: $oci_host_src"

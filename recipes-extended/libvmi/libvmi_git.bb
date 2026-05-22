@@ -12,9 +12,9 @@ SRC_URI = "git://github.com/libvmi/libvmi.git;branch=master;protocol=https \
            file://0001-Build-vbd-only-when-xen-is-enabled.patch \
 "
 
-SRCREV = "f02aeb751fd27bd4ae753dcd5904a4ef3232821e"
+SRCREV = "82bbee6c378da854d07887048b06dc4ee8e20d6a"
 
-inherit autotools-brokensep pkgconfig
+inherit autotools-brokensep pkgconfig gettext
 
 # Noramlly dynamic libs would be of the form libXX.so.1.0.0 in which case
 # bitbake should be able to properly populate the -dev package and the main

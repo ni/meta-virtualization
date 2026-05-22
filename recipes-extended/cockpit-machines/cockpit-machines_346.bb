@@ -13,9 +13,9 @@ DEPENDS += "cockpit"
 SRC_URI = "https://github.com/cockpit-project/cockpit-machines/releases/download/${PV}/cockpit-machines-${PV}.tar.xz"
 SRC_URI[sha256sum] = "c9d80357da2bf3ecda9698f0dc6fcb46675b3b76da9150a22178071fe982fcb0"
 
-S = "${WORKDIR}/${PN}"
+S = "${UNPACKDIR}/${PN}"
 
-inherit autotools-brokensep features_check gettext
+inherit features_check
 
 # systemd, which cockpit is dependent, is not compatible with musl lib
 COMPATIBLE_HOST:libc-musl = "null"
@@ -24,8 +24,21 @@ RDEPENDS:${PN} += "cockpit libvirt-dbus pciutils virt-manager-install"
 
 REQUIRED_DISTRO_FEATURES = "systemd pam"
 
-# Default installation path of cockpit-machines is /usr/local/
+do_configure[noexec] = "1"
+do_compile[noexec] = "1"
+
+do_install() {
+    install -d ${D}${datadir}/cockpit/machines
+    cp -r ${S}/dist/* ${D}${datadir}/cockpit/machines/
+
+    install -d ${D}${datadir}/metainfo
+    install -m 0644 ${S}/org.cockpit_project.machines.metainfo.xml ${D}${datadir}/metainfo/
+}
+
 FILES:${PN} = "\
-    ${prefix}/local/ \
-    ${datadir}/metainfo/org.cockpit-project.cockpit-machines.metainfo.xml \
+    ${datadir}/cockpit/machines/ \
+    ${datadir}/metainfo/org.cockpit_project.machines.metainfo.xml \
 "
+
+SKIP_RECIPE[cockpit-machines] ?= "${@bb.utils.contains('BBFILE_COLLECTIONS', 'webserver', '', 'Depends on meta-webserver which is not included', d)}"
+

@@ -1,9 +1,10 @@
-# Tests for vdkr, vpdmn and container-cross-install
+# Tests for vdkr, vpdmn, container-cross-install and Xen runtime
 
 Pytest-based test suite for:
 - **vdkr**: Docker CLI for cross-architecture emulation
 - **vpdmn**: Podman CLI for cross-architecture emulation
 - **container-cross-install**: Yocto container bundling system
+- **xen-runtime**: Xen hypervisor boot and runtime verification
 
 ## Requirements
 
@@ -346,6 +347,75 @@ pytest tests/test_container_cross_install.py::TestContainerCrossClass -v
 
 ---
 
+## Xen Runtime Tests
+
+Xen runtime tests boot an actual xen-image-minimal in QEMU and verify the Xen hypervisor is functional end-to-end. Tests detect available features inside Dom0 and skip gracefully when optional components are not installed.
+
+### Build Prerequisites
+
+| Test Tier | What to Add to `local.conf` | Build Command |
+|-----------|---------------------------|---------------|
+| **Dom0 boot** (core) | `DISTRO_FEATURES:append = " xen systemd"` | `bitbake xen-image-minimal` |
+| **Guest bundling** | `IMAGE_INSTALL:append:pn-xen-image-minimal = " alpine-xen-guest-bundle"` | `bitbake xen-image-minimal` |
+| **vxn/containerd** | `DISTRO_FEATURES:append = " virtualization vcontainer vxn"` and `IMAGE_INSTALL:append:pn-xen-image-minimal = " vxn"` and `BBMULTICONFIG = "vruntime-aarch64 vruntime-x86-64"` | `bitbake xen-image-minimal` |
+
+The test locates the image at: `{build_dir}/tmp/deploy/images/{machine}/xen-image-minimal-{machine}.rootfs.wic`
+
+### What the Tests Check
+
+| Test Class | What It Tests | What's Needed |
+|------------|---------------|---------------|
+| `TestXenDom0Boot` | Hypervisor running, xl list, dmesg, memory cap | Core Xen image |
+| `TestXenGuestBundleRuntime` | Bundled guests visible in xl list, xendomains active | Guest bundle packages |
+| `TestXenVxnStandalone` | vxn binary present, `vxn run` works | vxn in image + network |
+| `TestXenContainerd` | containerd active, ctr pull + vctr run | containerd + vctr + network |
+
+### Running Xen Runtime Tests
+
+```bash
+cd /opt/bruce/poky/meta-virtualization
+
+# All Xen runtime tests (requires built image + KVM)
+pytest tests/test_xen_runtime.py -v --machine qemux86-64
+
+# Skip network-dependent vxn/containerd tests
+pytest tests/test_xen_runtime.py -v -m "boot and not network"
+
+# Custom paths and longer timeout
+pytest tests/test_xen_runtime.py -v \
+    --poky-dir /opt/bruce/poky \
+    --build-dir /opt/bruce/poky/build \
+    --boot-timeout 180
+
+# Disable KVM (slower, but works in VMs)
+pytest tests/test_xen_runtime.py -v --no-kvm
+```
+
+### Xen Runtime Test Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--poky-dir PATH` | /opt/bruce/poky | Path to poky directory |
+| `--build-dir PATH` | $POKY_DIR/build | Path to build directory |
+| `--machine MACHINE` | qemux86-64 | Target machine (qemux86-64 or qemuarm64) |
+| `--boot-timeout SECS` | 120 | Timeout for boot to complete |
+| `--no-kvm` | (KVM enabled) | Disable KVM acceleration |
+
+### Skip Behavior
+
+Tests detect what's installed inside Dom0 and skip gracefully:
+
+- **No .wic image** → All tests skip: `"xen-image-minimal .wic image not found"`
+- **No pexpect** → All tests skip: `"pexpect not installed"`
+- **Boot fails** → All tests skip: `"Failed to boot Xen image"`
+- **No bundled guests** → Guest tests skip: `"No bundled guests detected"`
+- **No xendomains** → xendomains test skips: `"xendomains service not installed"`
+- **No vxn** → vxn tests skip: `"vxn not installed in image"`
+- **No containerd** → containerd tests skip: `"containerd not installed"`
+- **No vctr** → vctr test skips: `"vctr not installed in image"`
+
+---
+
 ## Capturing Test Output
 
 Test output is automatically captured to files for debugging:
@@ -459,6 +529,11 @@ tests/
 │   ├── TestMultiLayerOCIClass       # OCI_LAYERS support
 │   ├── TestMultiLayerOCIBuild       # layer build verification
 │   └── TestLayerCaching             # layer cache tests
+├── test_xen_runtime.py             # Xen runtime boot tests
+│   ├── TestXenDom0Boot              # hypervisor running, xl list, dmesg
+│   ├── TestXenGuestBundleRuntime    # bundled guests, xendomains
+│   ├── TestXenVxnStandalone         # vxn run (network)
+│   └── TestXenContainerd            # containerd + vctr (network)
 └── README.md                        # This file
 ```
 

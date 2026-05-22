@@ -29,6 +29,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 # This adds the file content hash to the task signature
 do_rootfs[file-checksums] += "${THISDIR}/files/vdkr-init.sh:True"
 do_rootfs[file-checksums] += "${THISDIR}/files/vcontainer-init-common.sh:True"
+do_rootfs[file-checksums] += "${THISDIR}/files/vxn-init.sh:True"
 
 # Force rebuild control:
 # Set VCONTAINER_FORCE_BUILD = "1" in local.conf to disable stamp caching
@@ -46,6 +47,8 @@ inherit core-image
 # We need Docker and container tools
 # Note: runc is explicitly listed because vruntime distro sets
 # VIRTUAL-RUNTIME_container_runtime="" to avoid runc/crun conflicts.
+# Note: skopeo is required inside the guest for batch import
+# (skopeo copy oci:... containers-storage:...).
 IMAGE_INSTALL = " \
     packagegroup-core-boot \
     docker-moby \
@@ -57,6 +60,7 @@ IMAGE_INSTALL = " \
     iptables \
     util-linux \
     kernel-modules \
+    ca-certificates \
 "
 
 # No extra features needed
@@ -84,6 +88,9 @@ install_vdkr_init() {
     # Install vdkr-init.sh as /init and vcontainer-init-common.sh alongside it
     install -m 0755 ${THISDIR}/files/vdkr-init.sh ${IMAGE_ROOTFS}/init
     install -m 0755 ${THISDIR}/files/vcontainer-init-common.sh ${IMAGE_ROOTFS}/vcontainer-init-common.sh
+
+    # Install vxn-init.sh for Xen backend (selected via vcontainer.init=/vxn-init.sh)
+    install -m 0755 ${THISDIR}/files/vxn-init.sh ${IMAGE_ROOTFS}/vxn-init.sh
 
     # Create required directories
     install -d ${IMAGE_ROOTFS}/mnt/input

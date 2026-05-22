@@ -11,17 +11,23 @@ KERNEL_FEATURES:append = "${@bb.utils.contains('DISTRO_FEATURES', 'aufs', ' feat
 # Always add a local/layer fragment for easy debug and enabling of options
 SRC_URI += "file://extra-configs.cfg"
 
-# Inject the kcfg sysroot root into the scc search path so compound .scc
+# Inject the kcfg sysroot into the scc search path so compound .scc
 # files (like container.scc) can resolve their include directives.
-# kernel-yocto.bbclass adds type=kmeta directories to -I includes via
-# find_kernel_feature_dirs/feat_dirs. The prefunc replaces the placeholder
-# directory with a symlink to the kcfg sysroot so that spp can resolve
-# include directives within .scc files that reference other fragments
-# by relative path (e.g. "include cfg/9p.scc" inside container.scc).
+# Only needed for kernels that do NOT have a type=kmeta SRC_URI entry
+# (i.e. no kernel-cache). The prefunc replaces this placeholder with
+# a symlink to the kcfg sysroot only for non-kernel-cache kernels.
+# For kernel-cache kernels the placeholder stays empty (harmless).
 SRC_URI:append = " file://kcfg-search-path;type=kmeta;destsuffix=kcfg-sysroot"
 
 python inject_kcfg_search_path() {
     import os, shutil
+
+    # Skip if the kernel has its own kmeta (kernel-cache)
+    src_uri = d.getVar('SRC_URI')
+    # Check for type=kmeta entries other than our own kcfg-search-path
+    for entry in src_uri.split():
+        if 'type=kmeta' in entry and 'kcfg-search-path' not in entry:
+            return
 
     unpackdir = d.getVar('UNPACKDIR')
     workdir = d.getVar('WORKDIR')
@@ -41,26 +47,20 @@ python inject_kcfg_search_path() {
 
 do_kernel_metadata[prefuncs] += "inject_kcfg_search_path"
 
-# if the kernel-yocto meta-data routine automatically starts to add the
-# recipe-sysroot-native, we can do away with this conditional, since all
-# features will be found at the same relative offset from a search
-# directory
-def kernel_cache_cond_feature(src_uri,feature):
-    import re
-    kernel_cache = re.search("kernel-cache", src_uri )
-    if kernel_cache:
-       return feature
-
-    return "../../recipe-sysroot-native/kcfg/" + feature
-
-# no conditional, just use the yocto-kernel-cache addition, yes
-# the src_uri isn't used, but we may need to check it in the future
+# Return the correct path for a kernel configuration fragment.
+# Kernels with their own kernel-cache (type=kmeta in SRC_URI) already
+# have fragments on spp's search path, so we use short paths that
+# resolve directly. Kernels without kernel-cache need the sysroot-
+# relative path (which requires the kcfg-search-path injection above).
 def kernel_cache_feature(src_uri,feature):
+    for entry in src_uri.split():
+        if 'type=kmeta' in entry and 'kcfg-search-path' not in entry:
+            return feature
     return "../../recipe-sysroot-native/kcfg/" + feature
 
 def distro_cond_feature(feature_fragment,distro_feature,d):
     import bb
-    feat = kernel_cache_feature("",feature_fragment)
+    feat = kernel_cache_feature(d.getVar('SRC_URI'),feature_fragment)
     return bb.utils.contains('DISTRO_FEATURES', distro_feature, ' ' + feat, ' ', d)
 
 # kept as a reference if we go back to a dynamically calculated
@@ -112,3 +112,6 @@ KERNEL_FEATURES:append = "${@distro_cond_feature('cgl/features/selinux/selinux.c
 
 # vcontainer
 KERNEL_FEATURES:append = "${@distro_cond_feature('cfg/container.scc', 'vcontainer', d)}"
+
+# vxn: Xen PV guest support for vcontainer-on-Xen
+SRC_URI += "${@bb.utils.contains('DISTRO_FEATURES', 'vxn', ' file://vxn.cfg', '', d)}"

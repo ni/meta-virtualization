@@ -35,7 +35,7 @@ PACKAGE_NAME = "docker"
 RPROVIDES:${PN} += "docker"
 RPROVIDES:${PN}-dbg += "docker-dbg"
 RPROVIDES:${PN}-dev += "docker-dev"
-RPROVIDES:${PN}-contrip += "docker-dev"
+RPROVIDES:${PN}-contrib += "docker-dev"
 
 inherit pkgconfig
 PACKAGECONFIG ??= "docker-init seccomp ca-certs"

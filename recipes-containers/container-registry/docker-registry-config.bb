@@ -60,6 +60,13 @@ DOCKER_REGISTRY_INSECURE ?= ""
 # NOT stored in bitbake - should point to external file
 CONTAINER_REGISTRY_AUTHFILE ?= ""
 
+# OCI runtime configuration for Docker daemon
+# JSON object mapping runtime names to paths, e.g.:
+#   DOCKER_OCI_RUNTIMES = '{"vxn": {"path": "/usr/bin/vxn-oci-runtime"}}'
+DOCKER_OCI_RUNTIMES ?= ""
+# Default OCI runtime name (must be a key in DOCKER_OCI_RUNTIMES or "runc")
+DOCKER_DEFAULT_RUNTIME ?= ""
+
 def get_insecure_registries(d):
     """Get insecure registries from either Docker-specific or generic config"""
     # Prefer explicit DOCKER_REGISTRY_INSECURE if set
@@ -87,8 +94,10 @@ python() {
         bb.fatal("CONTAINER_REGISTRY_SECURE='1' conflicts with insecure registry settings. "
                  "Use secure mode (TLS+auth) OR insecure mode (HTTP), not both.")
 
-    if not secure and not registries:
-        raise bb.parse.SkipRecipe("No registry configured - recipe is opt-in only")
+    oci_runtimes = (d.getVar('DOCKER_OCI_RUNTIMES') or "").strip()
+
+    if not secure and not registries and not oci_runtimes:
+        raise bb.parse.SkipRecipe("No registry or OCI runtime configured - recipe is opt-in only")
 
     # In secure mode, depend on PKI generation
     if secure:
@@ -136,6 +145,17 @@ python do_install() {
         if registries:
             config["insecure-registries"] = registries
             bb.note(f"Created Docker config with insecure registries: {registries}")
+
+    # OCI runtime configuration
+    oci_runtimes = (d.getVar('DOCKER_OCI_RUNTIMES') or "").strip()
+    default_runtime = (d.getVar('DOCKER_DEFAULT_RUNTIME') or "").strip()
+
+    if oci_runtimes:
+        config["runtimes"] = json.loads(oci_runtimes)
+        bb.note("Added OCI runtimes to Docker config: %s" % oci_runtimes)
+    if default_runtime:
+        config["default-runtime"] = default_runtime
+        bb.note("Set default Docker runtime: %s" % default_runtime)
 
     # Install authfile if provided (for baked credentials)
     if authfile and os.path.exists(authfile):

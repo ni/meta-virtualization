@@ -55,6 +55,8 @@ CHANGELOG v3.0.0:
 
 import argparse
 import concurrent.futures
+import csv
+import fnmatch
 import hashlib
 import io
 import json
@@ -66,6 +68,7 @@ import sys
 import tempfile
 import textwrap
 import threading
+import zipfile
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime, timedelta, timezone
@@ -2079,6 +2082,7 @@ def _execute(args: argparse.Namespace) -> int:
         debug_limit=debug_limit,
         skip_verify=args.skip_verify,
         verify_jobs=args.verify_jobs,
+        exclude_modules=args.exclude_module,
     )
 
     if success:
@@ -2102,6 +2106,36 @@ def _execute(args: argparse.Namespace) -> int:
             except Exception as e:
                 print(f"\n⚠️  Could not write corrected JSON: {e}")
 
+        # License scanning (after successful generation)
+        if args.scan_licenses and output_dir and not args.validate:
+            print("\n" + "=" * 70)
+            print("LICENSE SCANNING")
+            print("=" * 70)
+
+            # Determine discovery cache location
+            disc_cache = args.discovery_cache
+            if not disc_cache and args.gomodcache:
+                # gomodcache IS the discovery cache root
+                disc_cache = args.gomodcache
+            if not disc_cache:
+                # Try CURRENT_GOMODCACHE
+                if CURRENT_GOMODCACHE and Path(CURRENT_GOMODCACHE).exists():
+                    disc_cache = str(CURRENT_GOMODCACHE)
+
+            if disc_cache and os.path.isdir(disc_cache):
+                license_db = _resolve_license_db(args.common_license_dir)
+                if license_db:
+                    lic_results = scan_module_licenses(modules, disc_cache, license_db)
+                    if lic_results:
+                        write_license_inc(output_dir, lic_results)
+                    else:
+                        print("  No license files found in module zips")
+                else:
+                    print("  Skipping license scan: no license database available")
+            else:
+                print("  Skipping license scan: no discovery cache found")
+                print("  Hint: pass --discovery-cache <path> or run via bitbake -c discover_and_generate")
+
         exit_code = 0
     else:
         print("\n❌ FAILED - Recipe generation failed")
@@ -2110,8 +2144,17 @@ def _execute(args: argparse.Namespace) -> int:
     if SKIPPED_MODULES:
         print("\n⚠️  Skipped modules (no repository metadata)")
         for (module_path, version), reason in sorted(SKIPPED_MODULES.items()):
-            print(f"   - {module_path}@{version} [{reason}]")
-        print("   Use --set-repo / --inject-commit to add missing metadata before building.")
+            print(f"\n   - {module_path}@{version} [{reason}]")
+            print()
+            print(f"     Option 1: Exclude from VCS and fetch via Go module proxy instead.")
+            print(f"               Add to your recipe (.bb):")
+            print(f'         SRC_URI += "gomod://{module_path};version={version};sha256sum=<run bitbake -c fetch to get>"')
+            print(f'         GO_MOD_VCS_EXCLUDE += "{module_path}"')
+            print()
+            print(f"     Option 2: Same result, but for direct oe-go-mod-fetcher.py invocation.")
+            print(f"               Provide the git repository URL for this module:")
+            print(f"         python3 oe-go-mod-fetcher.py --set-repo {module_path}@{version} <git-url> \\")
+            print(f"           --discovered-modules <modules.json> --git-repo <repo> --git-ref <ref> --recipedir <dir>")
 
     return exit_code
 
@@ -3869,7 +3912,7 @@ def discover_modules(source_dir: Path, gomodcache: Optional[str] = None) -> List
 def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[Path],
                    git_repo: str, git_ref: str, validate_only: bool = False,
                    debug_limit: Optional[int] = None, skip_verify: bool = False,
-                   verify_jobs: int = 10) -> bool:
+                   verify_jobs: int = 10, exclude_modules: Optional[List[str]] = None) -> bool:
     """
     Phase 2: Recipe Generation
 
@@ -3896,6 +3939,17 @@ def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[
         return hashlib.sha256(f"{repo_key}:{commit}".encode()).hexdigest()
 
     unresolved_commits: List[Tuple[str, str, str, str, str]] = []
+
+    # Filter out excluded modules (e.g., deleted upstream repos that must use gomod://)
+    if exclude_modules:
+        before_count = len(modules)
+        excluded_prefixes = [e.strip() for e in exclude_modules]
+        modules = [m for m in modules if not any(
+            m.get('module_path', '').startswith(prefix) for prefix in excluded_prefixes
+        )]
+        excluded_count = before_count - len(modules)
+        if excluded_count:
+            print(f"\n⚙️  Excluded {excluded_count} modules matching: {', '.join(excluded_prefixes)}")
 
     total_modules = len(modules)
     if debug_limit is not None:
@@ -3929,7 +3983,14 @@ def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[
 
         # Trust the ref_hint from discovery - it will be validated/corrected during
         # the verification pass if needed (e.g., force-pushed tags are auto-corrected)
+        # BUT: for pseudo-versions, Go's Origin.Ref is the "nearest tag" used to derive
+        # the pseudo-version, NOT a tag that points to this commit. Using it as a tag=
+        # in SRC_URI causes BitBake to resolve the tag to a different commit and fail.
         ref_hint = module.get('vcs_ref', '')
+        version = module.get('version', '')
+        if ref_hint and parse_pseudo_version_tag(version):
+            # Pseudo-version: the vcs_ref is the base tag, not a ref pointing to this commit
+            ref_hint = ''
 
         entry = repo_info['commits'][commit_hash]
         entry['modules'].append(module)
@@ -3951,6 +4012,9 @@ def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[
             vcs_url = module['vcs_url']
             commit_hash = module['vcs_hash']
             ref_hint = module.get('vcs_ref', '')
+            # For pseudo-versions, vcs_ref is the nearest tag, not a ref pointing to this commit
+            if ref_hint and parse_pseudo_version_tag(module.get('version', '')):
+                ref_hint = ''
 
             print(f"  • verifying [{index}/{total_modules}] {module['module_path']}@{module['version']} -> {commit_hash[:12]}")
 
@@ -4040,12 +4104,21 @@ def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[
     if failed_results:
         print("\n❌ Unable to verify the following module commits against their repositories:")
         for _, module_path, version, commit_hash, vcs_url, ref_hint in failed_results:
-            print(f"   - {module_path}@{version} ({commit_hash})")
+            print(f"\n   - {module_path}@{version} ({commit_hash})")
             hint = f" {ref_hint}" if ref_hint else ""
             print(f"     try: git fetch --depth=1 {vcs_url}{hint} {commit_hash}")
-            print(f"     cache: mark reachable via --inject-commit '{vcs_url} {commit_hash}'")
-            print(f"     repo : override via --set-repo {module_path}@{version} {vcs_url}")
-        print("Aborting to prevent emitting invalid SRCREVs.")
+            print()
+            print(f"     Option 1: Exclude from VCS and fetch via Go module proxy instead.")
+            print(f"               Add to your recipe (.bb):")
+            print(f'         SRC_URI += "gomod://{module_path};version={version};sha256sum=<run bitbake -c fetch to get>"')
+            print(f'         GO_MOD_VCS_EXCLUDE += "{module_path}"')
+            print()
+            print(f"     Option 2: Same result, but for direct oe-go-mod-fetcher.py invocation.")
+            print(f"               Run before generation:")
+            print(f"         python3 oe-go-mod-fetcher.py --inject-commit '{vcs_url} {commit_hash}' \\")
+            print(f"           --set-repo {module_path}@{version} {vcs_url} \\")
+            print(f"           --discovered-modules <modules.json> --git-repo <repo> --git-ref <ref> --recipedir <dir>")
+        print("\nAborting to prevent emitting invalid SRCREVs.")
         return False
 
     if validate_only:
@@ -4204,6 +4277,7 @@ def generate_recipe(modules: List[Dict], source_dir: Path, output_dir: Optional[
     print(f"\nTo use these files, add to your recipe:")
     print(f"   require go-mod-git.inc")
     print(f"   require go-mod-cache.inc")
+    print(f"   require go-mod-licenses.inc  # if --scan-licenses was used")
 
     return True
 
@@ -4318,6 +4392,336 @@ def load_discovered_modules(discovered_modules_path: Path) -> Optional[List[Dict
         return None
 
 # =============================================================================
+# License Scanning
+# =============================================================================
+
+LICENSE_FILE_PATTERNS = [
+    '*LICEN[CS]E*', 'COPYING*', '*[Ll]icense*', 'LEGAL*', '[Ll]egal*',
+    '*GPL*', 'README.lic*', 'COPYRIGHT*', '[Cc]opyright*', 'e[dp]l-v10',
+]
+
+LICENSE_SKIP_EXTENSIONS = ('.html', '.js', '.json', '.svg', '.ts', '.go', '.sh')
+
+
+def _squashspaces(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _crunch_license_text(text: str) -> Optional[str]:
+    """Compute crunched MD5 of license text (same algorithm as OE-core)."""
+    license_title_re = re.compile(
+        r'^#*\(? *(This is )?([Tt]he )?.{0,15} ?[Ll]icen[sc]e( \(.{1,10}\))?\)?[:\.]? ?#*$')
+    license_statement_re = re.compile(
+        r'^((This (project|software)|.{1,10}) is( free software)? (released|licen[sc]ed)'
+        r'|(Released|Licen[cs]ed)) under the .{1,10} [Ll]icen[sc]e:?$')
+    copyright_re = re.compile(
+        r'^ *[#\*]* *(Modified work |MIT LICENSED )?Copyright ?(\([cC]\))? .*$')
+    disclaimer_re = re.compile(r'^ *\*? ?All [Rr]ights [Rr]eserved\.$')
+    email_re = re.compile(r'^.*<[\w\.-]*@[\w\.\-]*>$')
+    header_re = re.compile(r'^(\/\**!?)? ?[\-=\*]* ?(\*\/)?$')
+    tag_re = re.compile(r'^ *@?\(?([Ll]icense|MIT)\)?$')
+    url_re = re.compile(r'^ *[#\*]* *https?:\/\/[\w\.\/\-]+$')
+
+    lictext = []
+    for line in text.splitlines():
+        if copyright_re.match(line):
+            continue
+        if disclaimer_re.match(line):
+            continue
+        if email_re.match(line):
+            continue
+        if header_re.match(line):
+            continue
+        if tag_re.match(line):
+            continue
+        if url_re.match(line):
+            continue
+        if license_title_re.match(line):
+            continue
+        if license_statement_re.match(line):
+            continue
+        line = line.replace('*', '').replace('#', '')
+        line = line.replace('sub-license', 'sublicense')
+        line = _squashspaces(line)
+        line = (line.replace(u"\u2018", "'").replace(u"\u2019", "'")
+                .replace(u"\u201c", "'").replace(u"\u201d", "'")
+                .replace('"', "'").replace('`', "'"))
+        line = line.replace("{", "[").replace("}", "]")
+        if line:
+            lictext.append(line)
+
+    m = hashlib.md5()
+    try:
+        m.update(' '.join(lictext).encode('utf-8'))
+        return m.hexdigest()
+    except UnicodeEncodeError:
+        return None
+
+
+def _md5_bytes(data: bytes) -> str:
+    return hashlib.md5(data).hexdigest()
+
+
+def _build_license_db_from_dir(common_license_dir: str) -> Dict[str, str]:
+    """Build MD5->SPDX map by scanning a common-licenses directory."""
+    md5_to_spdx = {}
+    for fn in os.listdir(common_license_dir):
+        path = os.path.join(common_license_dir, fn)
+        if not os.path.isfile(path):
+            continue
+        with open(path, 'rb') as f:
+            data = f.read()
+        exact_md5 = _md5_bytes(data)
+        md5_to_spdx[exact_md5] = fn
+        try:
+            text = data.decode('utf-8', errors='surrogateescape')
+        except Exception:
+            continue
+        crunched = _crunch_license_text(text)
+        if crunched:
+            md5_to_spdx[crunched] = fn
+    return md5_to_spdx
+
+
+def _load_license_db_from_csv(csv_path: str) -> Dict[str, str]:
+    """Load MD5->SPDX map from bundled CSV."""
+    md5_to_spdx = {}
+    with open(csv_path, newline='') as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#'):
+                continue
+            parts = line.split(',', 2)
+            if len(parts) < 3:
+                continue
+            exact_md5, crunched_md5, spdx_id = parts
+            md5_to_spdx[exact_md5] = spdx_id
+            if crunched_md5:
+                md5_to_spdx[crunched_md5] = spdx_id
+    return md5_to_spdx
+
+
+def _find_common_license_dir() -> Optional[str]:
+    """Auto-detect common-licenses dir by walking up from script location."""
+    script_dir = Path(__file__).resolve().parent
+    # Walk up looking for meta/files/common-licenses
+    for parent in [script_dir] + list(script_dir.parents):
+        candidate = parent / 'meta' / 'files' / 'common-licenses'
+        if candidate.is_dir():
+            return str(candidate)
+    return None
+
+
+def _resolve_license_db(common_license_dir: Optional[str]) -> Dict[str, str]:
+    """Resolve the license hash database using the priority order."""
+    # Option 1: Explicit --common-license-dir
+    if common_license_dir and os.path.isdir(common_license_dir):
+        db = _build_license_db_from_dir(common_license_dir)
+        print(f"  License DB: {len(db)} hashes from {common_license_dir}")
+        return db
+
+    # Option 2: Auto-detect from poky tree
+    auto_dir = _find_common_license_dir()
+    if auto_dir:
+        db = _build_license_db_from_dir(auto_dir)
+        print(f"  License DB: {len(db)} hashes (auto-detected {auto_dir})")
+        return db
+
+    # Option 3: Bundled CSV
+    csv_path = Path(__file__).resolve().parent / 'data' / 'license-hashes.csv'
+    if csv_path.exists():
+        db = _load_license_db_from_csv(str(csv_path))
+        print(f"  License DB: {len(db)} hashes from bundled CSV")
+        print(f"  WARNING: Using bundled CSV - may not include custom or recently-added licenses")
+        return db
+
+    print("  WARNING: No license database found - license scanning will mark all as Unknown")
+    return {}
+
+
+def _is_license_file(filename: str) -> bool:
+    """Check if filename matches license file patterns."""
+    if filename.endswith(LICENSE_SKIP_EXTENSIONS):
+        return False
+    for pattern in LICENSE_FILE_PATTERNS:
+        if fnmatch.fnmatch(filename, pattern):
+            return True
+    return False
+
+
+def _go_module_case_encode(path: str) -> str:
+    """Encode a Go module path for filesystem: uppercase -> !lowercase."""
+    return re.sub(r'([A-Z])', lambda m: '!' + m.group(1).lower(), path)
+
+
+def _scan_licenses_from_zip(zip_path: str, license_db: Dict[str, str]
+                            ) -> List[Tuple[str, str, str]]:
+    """
+    Scan a Go module zip for license files.
+
+    Returns list of (spdx_name, relative_path, md5_hash) tuples.
+    relative_path is within the module root (no module@version prefix).
+    """
+    results = []
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Determine the prefix (module@version/) from the first entry
+            prefix = None
+            for name in zf.namelist():
+                at_idx = name.find('@')
+                if at_idx >= 0:
+                    slash_idx = name.find('/', at_idx)
+                    if slash_idx >= 0:
+                        prefix = name[:slash_idx + 1]
+                        break
+            if not prefix:
+                return results
+
+            for info in zf.infolist():
+                if info.is_dir():
+                    continue
+                if not info.filename.startswith(prefix):
+                    continue
+                rel_path = info.filename[len(prefix):]
+                if not rel_path:
+                    continue
+                basename = os.path.basename(rel_path)
+                if not _is_license_file(basename):
+                    continue
+                # Only scan top-level license files (not in subdirectories)
+                # to match OE-core's first_only=True behavior
+                if '/' in rel_path:
+                    continue
+
+                data = zf.read(info.filename)
+                md5 = _md5_bytes(data)
+                spdx = license_db.get(md5)
+                if not spdx:
+                    try:
+                        text = data.decode('utf-8', errors='surrogateescape')
+                    except Exception:
+                        text = ''
+                    crunched = _crunch_license_text(text)
+                    if crunched:
+                        spdx = license_db.get(crunched)
+                if not spdx:
+                    spdx = 'Unknown'
+                results.append((spdx, rel_path, md5))
+    except (zipfile.BadZipFile, OSError) as e:
+        print(f"  WARNING: Could not read zip {zip_path}: {e}")
+    return results
+
+
+def _find_module_zip(discovery_cache: str, module_path: str, version: str) -> Optional[str]:
+    """Find the .zip for a module in the discovery cache."""
+    encoded_path = _go_module_case_encode(module_path)
+    zip_path = os.path.join(
+        discovery_cache, 'cache', 'download',
+        encoded_path, '@v', f'{version}.zip'
+    )
+    if os.path.isfile(zip_path):
+        return zip_path
+    return None
+
+
+def scan_module_licenses(modules: List[Dict], discovery_cache: str,
+                         license_db: Dict[str, str]) -> Dict[str, Tuple[str, str, str]]:
+    """
+    Scan all modules for licenses using their discovery cache zips.
+
+    Returns dict mapping "module_path@version" to (spdx_name, license_file, md5).
+    Only the first license file per module (matching OE-core behavior).
+    """
+    results = {}
+    scanned = 0
+    no_zip = 0
+    unknown = 0
+
+    for module in modules:
+        module_path = module['module_path']
+        version = module['version']
+        key = f"{module_path}@{version}"
+
+        zip_path = _find_module_zip(discovery_cache, module_path, version)
+        if not zip_path:
+            no_zip += 1
+            continue
+
+        licenses = _scan_licenses_from_zip(zip_path, license_db)
+        if licenses:
+            # Take first match (sorted by path for determinism)
+            licenses.sort(key=lambda x: x[1])
+            spdx, rel_path, md5 = licenses[0]
+            results[key] = (spdx, rel_path, md5)
+            if spdx == 'Unknown':
+                unknown += 1
+        scanned += 1
+
+    print(f"\n  License scan: {len(results)} modules with licenses, "
+          f"{no_zip} missing zips, {unknown} unknown")
+    return results
+
+
+def _fold_uri(uri: str) -> str:
+    """Fold URI for sorting (same as OE-core go-mod-update-modules)."""
+    return uri.replace(';', ' ').replace('/', '!')
+
+
+def _tidy_licenses(licenses: Set[str]) -> List[str]:
+    """Sort and deduplicate license names."""
+    return sorted(licenses - {'Unknown'}, key=str.casefold)
+
+
+def write_license_inc(output_dir: Path, license_results: Dict[str, Tuple[str, str, str]]) -> Path:
+    """
+    Write go-mod-licenses.inc with LICENSE and LIC_FILES_CHKSUM.
+
+    Args:
+        output_dir: Recipe directory for output
+        license_results: Dict mapping "module@version" to (spdx, file, md5)
+
+    Returns:
+        Path to generated file
+    """
+    import urllib.parse
+
+    licenses = set()
+    lic_entries = []
+
+    for mod_ver, (spdx, lic_file, md5) in license_results.items():
+        licenses.add(spdx)
+        # Build path matching OE-core format: pkg/mod/<module@version>/<file>
+        lic_path = f"pkg/mod/{mod_ver}/{lic_file}"
+        encoded_spdx = urllib.parse.quote_plus(spdx)
+        lic_entries.append(f"file://{lic_path};md5={md5};spdx={encoded_spdx}")
+
+    tidy = _tidy_licenses(licenses)
+
+    inc_path = output_dir / "go-mod-licenses.inc"
+    with open(inc_path, 'w') as f:
+        f.write(f"# Generated by oe-go-mod-fetcher.py v{VERSION}\n")
+        f.write("#\n")
+        f.write("# Do not modify by hand. Regenerate with:\n")
+        f.write("#   bitbake <recipe> -c discover_and_generate\n\n")
+        if tidy:
+            f.write(f'LICENSE += "& {" & ".join(tidy)}"\n\n')
+        else:
+            f.write('# No known licenses found\n\n')
+        f.write('LIC_FILES_CHKSUM += "\\\n')
+        for entry in sorted(lic_entries, key=_fold_uri):
+            f.write(f'    {entry} \\\n')
+        f.write('"\n')
+
+    unknown_count = sum(1 for s, _, _ in license_results.values() if s == 'Unknown')
+    print(f"\n  Wrote {inc_path}")
+    print(f"  Licenses: {', '.join(tidy) if tidy else 'none'}")
+    if unknown_count:
+        print(f"  WARNING: {unknown_count} modules with Unknown license")
+
+    return inc_path
+
+
+# =============================================================================
 # Main Entry Point
 # =============================================================================
 
@@ -4345,9 +4749,24 @@ Persistent Caches:
   Use --clean-cache to remove metadata cache before regeneration.
   Use --clean-ls-remote-cache to remove both caches (slower, but fully fresh).
 
+License Scanning:
+  Use --scan-licenses to generate go-mod-licenses.inc with LICENSE and
+  LIC_FILES_CHKSUM for all Go module dependencies. License files are
+  detected using OE-core's glob patterns and matched against known SPDX
+  licenses via MD5 + crunched MD5 hashing.
+
+  The license hash database is resolved in order:
+  1. --common-license-dir <path> (explicit)
+  2. Auto-detect from poky tree (walk up from script location)
+  3. Bundled data/license-hashes.csv (offline fallback)
+
 Examples:
   # Normal regeneration (fast, uses caches)
   %(prog)s --recipedir /path/to/recipe/output
+
+  # With license scanning (requires discovery cache with .zip files)
+  %(prog)s --recipedir /path/to/recipe/output \\
+    --scan-licenses --discovery-cache /path/to/discovery/cache
 
   # Clean metadata cache (e.g., after fixing subdir derivation)
   %(prog)s --recipedir /path/to/recipe/output --clean-cache
@@ -4505,6 +4924,29 @@ Examples:
         nargs=1,
         action="append",
         help="Remove a previously pinned repository override (module or module@version)"
+    )
+
+    parser.add_argument(
+        "--exclude-module",
+        metavar="PREFIX",
+        action="append",
+        help="Exclude modules matching PREFIX from git:// generation (use gomod:// in recipe instead)"
+    )
+
+    parser.add_argument(
+        "--scan-licenses",
+        action="store_true",
+        help="Scan module zips for license files and generate go-mod-licenses.inc"
+    )
+
+    parser.add_argument(
+        "--common-license-dir",
+        help="Path to OE-core common-licenses directory (auto-detected if not specified)"
+    )
+
+    parser.add_argument(
+        "--discovery-cache",
+        help="Path to discovery cache containing module .zip files (for license scanning)"
     )
 
     parser.add_argument(

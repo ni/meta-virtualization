@@ -1223,7 +1223,61 @@ cmd_push() {{
         local name=$(basename "$oci_dir" | sed 's/-latest-oci$//' | sed 's/-oci$//')
         name=$(echo "$name" | sed 's/-qemux86-64//' | sed 's/-qemuarm64//')
         name=$(echo "$name" | sed 's/\\.rootfs-[0-9]*//')
+        # Strip -multiarch suffix for cleaner registry names
+        name=$(echo "$name" | sed 's/-multiarch$//')
 
+        # Detect multi-arch OCI Image Index
+        # Flat layout: index.json has multiple manifests with platform info
+        # Nested layout: index.json → single image index blob → platform manifests
+        local is_multiarch=0
+        local platform_file="$oci_dir/index.json"
+        local manifest_count=$(grep -c '"digest"' "$platform_file" 2>/dev/null || echo "0")
+        local has_platform=$(grep -c '"platform"' "$platform_file" 2>/dev/null || echo "0")
+
+        if [ "$manifest_count" -gt 1 ] && [ "$has_platform" -gt 0 ]; then
+            is_multiarch=1
+        elif grep -q 'image\\.index' "$platform_file" 2>/dev/null; then
+            # Nested layout: follow digest to blob
+            local idx_digest=$(grep -o '"sha256:[a-f0-9]*"' "$platform_file" 2>/dev/null | head -1 | tr -d '"' | sed 's/sha256://')
+            if [ -n "$idx_digest" ] && [ -f "$oci_dir/blobs/sha256/$idx_digest" ]; then
+                if grep -q '"platform"' "$oci_dir/blobs/sha256/$idx_digest" 2>/dev/null; then
+                    platform_file="$oci_dir/blobs/sha256/$idx_digest"
+                    is_multiarch=1
+                fi
+            fi
+        fi
+
+        if [ "$is_multiarch" = "1" ]; then
+            # Multi-arch OCI Image Index: push with --all to preserve manifest list
+            local platforms=$(grep -o '"architecture"[[:space:]]*:[[:space:]]*"[^"]*"' "$platform_file" | \\
+                sed 's/.*"\\([^"]*\\)"$/\\1/' | tr '\\n' ' ')
+
+            echo "Pushing multi-arch OCI Image Index: $oci_dir"
+            echo "  Image name: $name"
+            echo "  Platforms: $platforms"
+            echo "  To registry: $REGISTRY_URL/$REGISTRY_NAMESPACE/"
+            echo "  Tags: $tags"
+            echo ""
+
+            local tls_args=$(get_tls_args dest)
+            for tag in $tags; do
+                echo "  Pushing manifest list: $name:$tag"
+                if "$SKOPEO_BIN" copy --all $tls_args $auth_args \\
+                    "oci:$oci_dir" \\
+                    "docker://$REGISTRY_URL/$REGISTRY_NAMESPACE/$name:$tag" 2>&1; then
+                    echo "  -> $REGISTRY_URL/$REGISTRY_NAMESPACE/$name:$tag (manifest list: $platforms)"
+                else
+                    echo "  ERROR: Failed to push multi-arch image"
+                    return 1
+                fi
+            done
+
+            echo ""
+            echo "Done."
+            return 0
+        fi
+
+        # Single-arch OCI: push normally
         local arch=$(get_oci_arch "$oci_dir")
         [ -z "$arch" ] && arch="unknown"
 

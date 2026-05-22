@@ -9,12 +9,12 @@ REQUIRED_DISTRO_FEATURES ?= "seccomp"
 
 DEPENDS = "glib-2.0 go-md2man-native libseccomp"
 
-SRCREV = "42da7ac3fe667a3369d54413ef92664043105f19"
+SRCREV = "86e810678dc6444497a6c6e4811793c67d8102a7"
 SRC_URI = "\
     git://github.com/containers/conmon.git;branch=main;protocol=https \
 "
 
-PV = "2.1.13+git"
+PV = "2.2.1+git"
 
 inherit pkgconfig
 

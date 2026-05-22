@@ -40,11 +40,14 @@ RDEPENDS:packagegroup-k8s-node = " \
 RDEPENDS:packagegroup-k3s-host = " \
     packagegroup-kubernetes-base \
     k3s-server \
+    k3s-agent \
+    k3s-net-conf \
     k3s-cni \
 "
 
 RDEPENDS:packagegroup-k3s-node = " \
     packagegroup-kubernetes-base \
     k3s-agent \
+    k3s-net-conf \
     k3s-cni \
 "

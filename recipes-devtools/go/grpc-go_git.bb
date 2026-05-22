@@ -7,10 +7,10 @@ LIC_FILES_CHKSUM = "file://src/${PKG_NAME}/LICENSE;md5=3b83ef96387f14655fc854ddc
 SRCNAME = "grpc-go"
 
 PKG_NAME = "google.golang.org/grpc"
-SRC_URI = "git://github.com/grpc/${SRCNAME}.git;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/src/${PKG_NAME};branch=v1.59.x;protocol=https"
+SRC_URI = "git://github.com/grpc/${SRCNAME}.git;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/src/${PKG_NAME};nobranch=1;protocol=https"
 
-SRCREV = "7765221f4bf6104973db7946d56936cf838cad46"
-PV = "1.59.0+git"
+SRCREV = "dda86dbd9cecb8b35b58c73d507d81d67761205f"
+PV = "1.79.3+git"
 
 # NO-OP the do compile rule because this recipe is source only.
 do_compile() {

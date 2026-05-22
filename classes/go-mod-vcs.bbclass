@@ -818,6 +818,11 @@ python do_create_module_cache() {
     workdir = Path(d.getVar('WORKDIR'))
     modules_data = json.loads(d.getVar('GO_MODULE_CACHE_DATA'))
 
+    # Pure hybrid mode (all gomod://, no VCS modules) - nothing to do
+    if not modules_data:
+        bb.note("No VCS modules to process (pure hybrid mode) - skipping cache creation")
+        return
+
     # Remove go.sum files from git-fetched dependencies to prevent checksum conflicts
     # The module checksums from git sources differ from the proxy checksums, and stale
     # go.sum files in dependencies can cause "checksum mismatch" errors during build
@@ -1046,7 +1051,8 @@ python do_sync_go_files() {
             }
 
     if not our_modules:
-        bb.fatal("No modules found in cache - cannot synchronize go.mod/go.sum")
+        bb.note("No VCS modules in cache (pure hybrid mode) - skipping go.mod/go.sum sync")
+        return
 
     bb.note(f"Found {len(our_modules)} modules in cache")
 

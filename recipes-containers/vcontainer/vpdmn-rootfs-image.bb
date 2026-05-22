@@ -23,6 +23,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda
 # This adds the file content hash to the task signature
 do_rootfs[file-checksums] += "${THISDIR}/files/vpdmn-init.sh:True"
 do_rootfs[file-checksums] += "${THISDIR}/files/vcontainer-init-common.sh:True"
+do_rootfs[file-checksums] += "${THISDIR}/files/vxn-init.sh:True"
 
 # Force rebuild control:
 # Set VCONTAINER_FORCE_BUILD = "1" in local.conf to disable stamp caching
@@ -41,14 +42,15 @@ inherit core-image
 # Podman is daemonless - no containerd required!
 # Note: crun is explicitly listed because vruntime distro sets
 # VIRTUAL-RUNTIME_container_runtime="" to avoid runc/crun conflicts.
+# Note: skopeo is required inside the guest for batch import
+# (skopeo copy oci:... containers-storage:...).
 IMAGE_INSTALL = " \
     packagegroup-core-boot \
     podman \
     crun \
     skopeo \
     conmon \
-    netavark \
-    aardvark-dns \
+    cni \
     busybox \
     iproute2 \
     iptables \
@@ -74,6 +76,9 @@ install_vpdmn_init() {
     # Install vpdmn-init.sh as /init and vcontainer-init-common.sh alongside it
     install -m 0755 ${THISDIR}/files/vpdmn-init.sh ${IMAGE_ROOTFS}/init
     install -m 0755 ${THISDIR}/files/vcontainer-init-common.sh ${IMAGE_ROOTFS}/vcontainer-init-common.sh
+
+    # Install vxn-init.sh for Xen backend (selected via vcontainer.init=/vxn-init.sh)
+    install -m 0755 ${THISDIR}/files/vxn-init.sh ${IMAGE_ROOTFS}/vxn-init.sh
 
     # Create required directories
     install -d ${IMAGE_ROOTFS}/mnt/input
@@ -116,13 +121,27 @@ additionalimagestores = []
 EOF
 
     # Create containers.conf for podman engine settings
+    # Use CNI instead of netavark — netavark's dependency chain
+    # (nmap → libpcap → bluez5 → python3-pygobject → cairo) is too
+    # heavy for the vruntime BBMASK environment.
     cat > ${IMAGE_ROOTFS}/etc/containers/containers.conf << 'EOF'
-[engine]
-# Location of helper binaries (netavark, aardvark-dns)
-helper_binaries_dir = ["/usr/libexec/podman"]
-
 [network]
-# Use netavark as the network backend
-network_backend = "netavark"
+network_backend = "cni"
+cni_plugin_dirs = ["/opt/cni/bin", "/usr/libexec/cni"]
+EOF
+
+    # Prevent libnss_systemd segfaults — systemd is not running in the
+    # vruntime VM (busybox init), but libnss_systemd.so is installed as
+    # a dependency. Override nsswitch.conf to use only files/compat.
+    cat > ${IMAGE_ROOTFS}/etc/nsswitch.conf << 'EOF'
+passwd:     files
+group:      files
+shadow:     files
+hosts:      files dns
+networks:   files
+protocols:  files
+services:   files
+ethers:     files
+rpc:        files
 EOF
 }

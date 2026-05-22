@@ -6,11 +6,11 @@ LIC_FILES_CHKSUM = "file://src/${PKG_NAME}/LICENSE;md5=d2794c0df5b907fdace235a61
 
 SRCNAME = "distribution"
 
-PKG_NAME = "github.com/docker/${SRCNAME}"
-SRC_URI = "git://${PKG_NAME}.git;branch=docker/1.13;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/src/${PKG_NAME};protocol=https"
+PKG_NAME = "github.com/distribution/${SRCNAME}"
+SRC_URI = "git://${PKG_NAME}.git;branch=main;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/src/${PKG_NAME};protocol=https"
 
-SRCREV = "28602af35aceda2f8d571bad7ca37a54cf0250bc"
-PV = "2.6.0+git"
+SRCREV = "678b095af9c9be2a769da308daa76de583240f9b"
+PV = "3.0.0+git"
 
 inherit meta-virt-depreciated-warning
 
@@ -37,3 +37,5 @@ go_distribution_digeset_sysroot_preprocess () {
 }
 
 FILES:${PN} += "${prefix}/local/go/src/${PKG_NAME}/*"
+
+CVE_PRODUCT = "docker:registry"

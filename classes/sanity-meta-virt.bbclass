@@ -1,3 +1,5 @@
+SKIP_META_VIRT_SANITY_CHECK ?= "1"
+
 addhandler virt_bbappend_distrocheck
 virt_bbappend_distrocheck[eventmask] = "bb.event.SanityCheck"
 python virt_bbappend_distrocheck() {

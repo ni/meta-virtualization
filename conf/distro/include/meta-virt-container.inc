@@ -40,3 +40,13 @@
 
 CONTAINER_RO_REMOVE ?= " ${@bb.utils.contains('VIRTUAL-RUNTIME_container_engine', 'podman', 'shadow', '', d)}"
 ROOTFS_RO_UNNEEDED:remove = "${CONTAINER_RO_REMOVE}"
+
+# Container registry IMAGE_FEATURES support.
+# Defining FEATURE_PACKAGES_container-registry globally makes
+# "container-registry" a valid IMAGE_FEATURES value for any image
+# recipe (image.bbclass check_image_features auto-discovers
+# FEATURE_PACKAGES_* variables). This avoids IMAGE_FEATURES[validitems]
+# which pollutes signatures when set globally.
+# Default is empty (validation only); container-image-host.bb sets the
+# actual packages.
+FEATURE_PACKAGES_container-registry ?= ""
