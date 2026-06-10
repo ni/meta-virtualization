@@ -56,9 +56,12 @@ SRC_URI = "\
 	git://github.com/docker/buildx.git;branch=v0.18;name=buildx;destsuffix=git/buildx;protocol=https \
 	file://docker.init \
 	file://0001-libnetwork-use-GO-instead-of-go.patch \
-        file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
-        file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \
-        file://0001-buildx-use-GO-instead-of-go-and-remove-mod-vendor.patch;patchdir=buildx \
+		file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
+		file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \
+		file://0001-buildx-use-GO-instead-of-go-and-remove-mod-vendor.patch;patchdir=buildx \
+		file://CVE-2026-33997.patch;patchdir=src/import \
+		file://CVE-2026-34040_p1.patch;patchdir=src/import \
+		file://CVE-2026-34040_p2.patch;patchdir=src/import \
 	"
 
 DOCKER_COMMIT = "${SRCREV_moby}"

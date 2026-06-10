@@ -49,6 +49,7 @@ SRC_URI = "git://github.com/lxc/lxc.git;branch=stable-5.0;protocol=https \
 	file://lxc-net \
 	file://0001-lxc-test-usernic-drop-cgroup-handling.patch \
 	file://0001-tests-remove-old-and-broken-cgroup-handling-code-fro.patch \
+	file://CVE-2026-39402.patch \
 	"
 
 SRCREV = "cb8e38aca27a23964941f0f011a8919aab8bebab"

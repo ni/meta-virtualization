@@ -14,6 +14,13 @@ PV = "2.6.0+git"
 
 S = "${WORKDIR}/git"
 
+# CVE-2020-29591 affects official Docker Hub registry container images
+# with an unlocked root account, not the go-distribution source recipe.
+# This recipe is source-only and does not ship the official registry
+# container image or rootfs where the vulnerable /etc/shadow
+# configuration existed.
+CVE_STATUS[CVE-2020-29591] = "cpe-incorrect: affects official registry container image configuration, not this source-only recipe"
+
 inherit meta-virt-depreciated-warning
 
 # NO-OP the do compile rule because this recipe is source only.

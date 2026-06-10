@@ -37,6 +37,7 @@ PV = "5.0.3+git"
 
 CVE_STATUS[CVE-2022-2989] = "fixed-version: fixed since v4.3.0"
 CVE_STATUS[CVE-2023-0778] = "fixed-version: fixed since v4.5.0"
+CVE_STATUS[CVE-2026-33414] = "not-applicable-platform: affects only Podman's Windows HyperV backend"
 
 PACKAGES =+ "${PN}-contrib"
 
