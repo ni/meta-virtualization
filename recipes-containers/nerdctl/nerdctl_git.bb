@@ -40,7 +40,7 @@ LIC_FILES_CHKSUM = "file://src/import/LICENSE;md5=3b83ef96387f14655fc854ddc3c6bd
 
 GO_IMPORT = "import"
 
-PV = "v2.2.0"
+PV = "v2.2.1"
 
 NERDCTL_PKG = "github.com/containerd/nerdctl"
 

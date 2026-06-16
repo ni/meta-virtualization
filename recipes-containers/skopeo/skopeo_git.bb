@@ -26,8 +26,8 @@ SRC_URI = " \
     file://0001-makefile-add-GOBUILDFLAGS-to-go-build-call.patch \
 "
 
-SRCREV = "fd3ba47e00ecb495b8eca1594c227fbb6045a8eb"
-PV = "1.22.0+git"
+SRCREV = "267465e170820673de25149378284fb352daa65e"
+PV = "1.22.2+git"
 GO_IMPORT = "import"
 
 S = "${UNPACKDIR}/git/src/github.com/containers/skopeo"
