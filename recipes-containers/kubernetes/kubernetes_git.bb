@@ -5,9 +5,9 @@ applications across multiple hosts, providing basic mechanisms for deployment, \
 maintenance, and scaling of applications. \
 "
 
-PV = "1.35.2+git"
-CVE_VERSION = "1.35.2"
-SRCREV_kubernetes = "b6f632ba56e937dad484d5ac99d5ff51e7073dfe"
+PV = "1.35.5+git"
+CVE_VERSION = "1.35.5"
+SRCREV_kubernetes = "6636cbce3bbef91ff61d36658757179426f9e1b2"
 SRCREV_kubernetes-release = "21382abdbfa8e6a43fd417306fa649cb651cc06e"
 PE = "1"
 
@@ -19,7 +19,7 @@ SRC_URI:class-devupstream = "git://github.com/kubernetes/kubernetes.git;branch=r
                             "
 SRCREV_kubernetes:class-devupstream = "b6f632ba56e937dad484d5ac99d5ff51e7073dfe"
 SRCREV_kubernetes-release:class-devupstream = "21382abdbfa8e6a43fd417306fa649cb651cc06e"
-PV:class-devupstream = "1.35.2+git${SRCREV_kubernetes}"
+PV:class-devupstream = "1.35.5+git${SRCREV_kubernetes}"
 
 SRCREV_FORMAT ?= "kubernetes_release"
 
