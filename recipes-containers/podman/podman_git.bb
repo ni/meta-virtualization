@@ -24,6 +24,8 @@ SRC_URI = " \
     file://0001-Use-securejoin.SecureJoin-when-forming-userns-paths.patch;patchdir=src/import/vendor/github.com/containers/storage \
     file://CVE-2025-6032.patch;patchdir=src/import \
     file://CVE-2024-9341.patch;patchdir=src/import \
+    file://CVE-2026-55686-dependent.patch;patchdir=src/import \
+    file://CVE-2026-55686.patch;patchdir=src/import \
 "
 
 LICENSE = "Apache-2.0"

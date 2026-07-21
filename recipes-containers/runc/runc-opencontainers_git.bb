@@ -4,6 +4,7 @@ SRCREV = "eeb7e6024f9ee43876301b1d23c353384fa6dcdd"
 SRC_URI = " \
     git://github.com/opencontainers/runc;branch=release-1.2;protocol=https \
     file://0001-Makefile-respect-GOBUILDFLAGS-for-runc-and-remove-re.patch \
+    file://CVE-2026-41579.patch \
     "
 RUNC_VERSION = "1.2.8"
 
