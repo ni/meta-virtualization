@@ -14,3 +14,6 @@ RDEPENDS:${PN} += " \
 	python3-sphinx \
 	"
 
+SRC_URI += "file://CVE-2024-42353.patch \
+            file://CVE-2026-44889.patch \
+           "
