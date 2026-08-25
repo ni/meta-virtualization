@@ -50,13 +50,16 @@ SRCREV_buildx = "fa4461b9a1ec45c23d1b9e32dee0d0a8ed29900b"
 SRCREV_FORMAT = "moby"
 SRC_URI = "\
 	git://github.com/moby/moby.git;nobranch=1;name=moby;protocol=https;destsuffix=${GO_SRCURI_DESTSUFFIX} \
-	git://github.com/docker/cli.git;nobranch=1;name=cli;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/cli;protocol=https \
+	git://github.com/docker/cli;nobranch=1;name=cli;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/cli;protocol=https \
 	git://github.com/docker/buildx.git;branch=v0.18;name=buildx;destsuffix=${BB_GIT_DEFAULT_DESTSUFFIX}/buildx;protocol=https \
 	file://docker.init \
-	file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
-	file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \
 	file://0001-buildx-use-GO-instead-of-go-and-remove-mod-vendor.patch;patchdir=buildx \
-    file://0001-check-config-make-CONFIG_MEMCG_SWAP-conditional.patch;patchdir=src/import \
+        file://0001-cli-use-external-GO111MODULE-and-cross-compiler.patch \
+        file://0001-dynbinary-use-go-cross-compiler.patch;patchdir=src/import \
+        file://0001-check-config-make-CONFIG_MEMCG_SWAP-conditional.patch;patchdir=src/import \
+        file://CVE-2026-41568.patch;patchdir=src/import \
+        file://CVE-2026-42306_p1.patch;patchdir=src/import \
+        file://CVE-2026-42306_p2.patch;patchdir=src/import \
 	"
 
 DOCKER_COMMIT = "${SRCREV_moby}"
