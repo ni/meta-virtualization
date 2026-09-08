@@ -26,6 +26,7 @@ SRC_URI = " \
     file://CVE-2024-9341.patch;patchdir=src/import \
     file://CVE-2026-55686-dependent.patch;patchdir=src/import \
     file://CVE-2026-55686.patch;patchdir=src/import \
+    file://CVE-2026-57231.patch;patchdir=src/import \
 "
 
 LICENSE = "Apache-2.0"

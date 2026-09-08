@@ -7,7 +7,10 @@ LIC_FILES_CHKSUM = "file://LICENSE;md5=8dadfef729c08ec4e631c4f6fc5d43a0"
 SRCNAME = "logrus"
 
 PKG_NAME = "github.com/sirupsen/${SRCNAME}"
-SRC_URI = "git://${PKG_NAME};branch=master;protocol=https"
+SRC_URI = "git://${PKG_NAME};branch=master;protocol=https \
+           file://CVE-2025-65637_p1.patch \
+           file://CVE-2025-65637_p2.patch \
+          "
 
 SRCREV = "d26492970760ca5d33129d2d799e34be5c4782eb"
 PV = "0.11.0+git"
